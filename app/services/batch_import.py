@@ -2,8 +2,8 @@
 
 只负责"文件里的数据本身对不对"，不碰 Keycloak——真正建号复用
 KeycloakService.create_user()，跟单人建号走同一条业务逻辑（密码生成规则/
-加组/失败回滚），不重新实现一遍。这是 xuechuan-quick-sso/create_users_from_xlsx.py
-那套现有批量建号流程的 Web 化，表头格式保持一致，管理员不用重新学一套。
+加组/失败回滚），不重新实现一遍。这是现有命令行批量建号脚本（
+create_users_from_xlsx.py）的 Web 化，表头格式保持一致，管理员不用重新学一套。
 """
 
 import io

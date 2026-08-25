@@ -109,8 +109,7 @@ def test_create_user_omits_attributes_when_no_chinese_name_given():
 
 def test_create_user_sends_default_roles_quick_explicitly():
     """2026-08-21：不依赖 Keycloak 自动赋默认角色，显式声明 realmRoles，
-    双保险防住 xuechuan-quick-sso 那两个脚本踩过的漏赋坑（见
-    troubleshooting.md 第 10 条）。"""
+    双保险防住现有命令行建号脚本踩过的漏赋坑。"""
     posted_payloads = []
 
     def handler(request: httpx.Request) -> httpx.Response:

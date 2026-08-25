@@ -50,8 +50,8 @@ class QuickSightStatusChecker:
 
     def get_subscription_role(self, role_prefix: str, email: str) -> Optional[str]:
         """role_prefix 形如 QuickAuthorProRole，QuickSight 侧用户名是
-        f"{role_prefix}/{email}"（见 xuechuan-quick-sso/deployment.md 第 12 节
-        端到端验证记录的真实命名格式）。返回 None 表示查不到/未知，不代表订阅
+        f"{role_prefix}/{email}"（现有生产环境端到端验证记录过的真实命名
+        格式）。返回 None 表示查不到/未知，不代表订阅
         一定没生效。
         """
         if self._client is None:
@@ -73,8 +73,8 @@ class QuickSightStatusChecker:
 
 # Keycloak 组路径 -> QuickSight IAM Role 前缀，用于拼 QuickSight 侧用户名。
 # 覆盖全部 6 档（对齐 keycloak_service.ROLE_TO_GROUP，2026-08-20 扩大管理
-# 范围之后不再只有作者两档），前缀命名沿用 xuechuan-quick-sso/template.yaml
-# 里 IAM Role 的实际命名（QuickAdminRole/QuickAdminProRole 等）。
+# 范围之后不再只有作者两档），前缀命名沿用现有生产环境 IAM Role 的实际
+# 命名（QuickAdminRole/QuickAdminProRole 等）。
 GROUP_TO_ROLE_PREFIX = {
     "/quick-admin": "QuickAdminRole",
     "/quick-admin-pro": "QuickAdminProRole",

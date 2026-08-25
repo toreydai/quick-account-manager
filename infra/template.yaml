@@ -1,12 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  quick-account-manager：独立 EC2 + 复用 xuechuan-quick-sso 现有 ALB 的新
-  CloudFormation 栈（docs/design.md 3.1/3.2 节）。这是完全独立的栈，不修改、
-  不依赖 ../../xuechuan-quick-sso/template.yaml 那个栈的模板文件——现有 ALB
-  的 Listener ARN 作为字符串参数传进来，CloudFormation 层面不建立跨栈依赖，
-  两个栈互不影响，也各自可以独立删除/重建（design.md 3.1 节「已知耦合风险」：
-  这意味着如果现有 ALB/Listener 被替换，这个栈不会自动感知，见下面参数说明
-  和 README 的运维检查清单）。
+  quick-account-manager：独立 EC2 + 复用现有生产 ALB 的新 CloudFormation 栈
+  （docs/design.md 3.1/3.2 节）。这是完全独立的栈，不修改、不依赖现有生产栈
+  的模板文件——现有 ALB 的 Listener ARN 作为字符串参数传进来，CloudFormation
+  层面不建立跨栈依赖，两个栈互不影响，也各自可以独立删除/重建（design.md
+  3.1 节「已知耦合风险」：这意味着如果现有 ALB/Listener 被替换，这个栈不会
+  自动感知，见下面参数说明和 deployment.md 的运维检查清单）。
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -19,7 +18,7 @@ Metadata:
           - InstanceType
           - AmiId
       - Label:
-          default: 复用现有 ALB（xuechuan-quick-sso 栈）
+          default: 复用现有 ALB（现有生产栈）
         Parameters:
           - ExistingAlbListenerArn
           - ExistingAlbSecurityGroupId
@@ -35,7 +34,7 @@ Parameters:
     Type: AWS::EC2::VPC::Id
     Default: vpc-xxxxxxxxxxxxxxxxx
     Description: >-
-      复用 xuechuan-quick-sso 那台 Keycloak 用的同一个默认 VPC。占位符，
+      复用现有 Keycloak 实例所在的同一个默认 VPC。占位符，
       部署前必须用 --parameter-overrides 传入真实值，见 deployment.md §7.2
 
   AppSubnetId:
@@ -58,7 +57,7 @@ Parameters:
     Default: ami-xxxxxxxxxxxxxxxxx
     Description: >-
       AL2023 arm64 AMI，锁定成字面量 ID，不用 SSM 动态解析引用——直接照搬
-      xuechuan-quick-sso 踩过的教训（deployment.md 第 20-21 节：动态解析会
+      现有生产环境踩过的教训（deployment.md 第 20-21 节：动态解析会
       在任何一次不相关的模板更新时把实例整个替换掉）。要升级 AMI 就手动改
       这个 Default 并评估重建影响，不要改回动态引用写法。占位符，部署前
       必须用 --parameter-overrides 传入真实值。
@@ -67,7 +66,7 @@ Parameters:
     Type: String
     Default: arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/your-existing-alb/xxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxx
     Description: >-
-      xuechuan-quick-sso 栈里 HttpsListener 的 ARN（只读方式核实：
+      现有生产栈里 HttpsListener 的 ARN（只读方式核实：
       aws elbv2 describe-listeners）。字符串参数传入，不建跨栈依赖——部署前
       务必按 design.md 3.1 节的运维检查清单重新核对这个值没有变。占位符，
       部署前必须用 --parameter-overrides 传入真实值。
@@ -76,7 +75,7 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
     Default: sg-xxxxxxxxxxxxxxxxx
     Description: >-
-      xuechuan-quick-sso 栈里的 ALBSecurityGroup，新实例的安全组只放行这个
+      现有生产栈里的 ALBSecurityGroup，新实例的安全组只放行这个
       来源。占位符，部署前必须用 --parameter-overrides 传入真实值。
 
   AdminDomainName:
@@ -228,9 +227,8 @@ Resources:
           mkdir -p /opt/quick-account-manager
           # 代码部署（git clone / CI 同步）和 .env（走 SSM Parameter Store
           # SecureString 取值）是部署时的人工步骤，不在 UserData 里写死仓库
-          # 地址——README「部署步骤」一节有完整说明，避免重蹈
-          # xuechuan-quick-sso 那次 UserData 写死 fork 仓库地址导致 404 的坑
-          # （deployment.md 第 5 节）。
+          # 地址——deployment.md 有完整说明，避免重蹈此前踩过的坑（UserData
+          # 写死某个 fork 仓库地址，仓库改名/删除后直接 404）。
 
       # 这台实例只放行 SSM 出站访问，不建密钥对、不开 22 端口
       # （design.md 3.2 节）。

@@ -7,43 +7,28 @@
 ## 1. 一句话架构
 
 FastAPI 单体应用（服务端渲染，SQLite 单表持久化）+ Keycloak（身份源 + 用户数据源）+
-QuickSight（只读订阅状态核对），部署在一台独立 EC2 上，复用 `xuechuan-quick-sso` 现有
-ALB 做流量入口。应用本身**不维护用户数据的本地副本**——Keycloak 是唯一真相源，应用只
-持久化一张审计日志表。
+QuickSight（只读订阅状态核对），部署在一台独立 EC2 上，复用现有生产 ALB 做流量入口。
+应用本身**不维护用户数据的本地副本**——Keycloak 是唯一真相源，应用只持久化一张审计
+日志表。
 
 ## 2. 部署拓扑
 
-```
-                        ┌─────────────────────────────┐
-   HTTPS (443)          │   现有 ALB（your-existing-alb-...） │
-   ─────────────────►   │   *.example.com 通配符证书 │
-                        └───────────┬─────────────┬────┘
-                                    │             │
-                     Host: awssso...│             │Host: quick-admin...（本项目新增）
-                                    ▼             ▼
-                        ┌───────────────┐   ┌───────────────────┐
-                        │ 现有 TargetGroup│   │ 新 TargetGroup       │
-                        │  → :8080       │   │  → :8000            │
-                        └───────┬───────┘   └─────────┬─────────┘
-                                ▼                       ▼
-                  ┌─────────────────────┐   ┌─────────────────────────┐
-                  │ 现有 EC2             │   │ 新 EC2（本项目）           │
-                  │ Keycloak + Postgres  │   │ quick-account-manager    │
-                  │                      │   │ (Docker 容器 + SQLite)    │
-                  └─────────────────────┘   └───────────┬─────────────┘
-                                                          │ HTTPS
-                                                          │ Admin REST API
-                                                          │ (client_credentials)
-                                                          ▼
-                                              Keycloak quick realm
-                                                          │
-                                                          │ (只读)
-                                                          ▼
-                                              QuickSight (DescribeUser)
+```mermaid
+graph TB
+    Client["管理员浏览器"] -->|"HTTPS 443"| ALB["现有 ALB<br/>通配符证书"]
+
+    ALB -->|"Host: sso.example.com<br/>员工 SSO 登录"| TG1["现有 TargetGroup<br/>:8080"]
+    ALB -->|"Host: quick-admin...（本项目新增）"| TG2["新 TargetGroup<br/>:8000"]
+
+    TG1 --> EC2A["现有 EC2<br/>Keycloak + Postgres"]
+    TG2 --> EC2B["新 EC2（本项目）<br/>quick-account-manager<br/>Docker 容器 + SQLite"]
+
+    EC2B -->|"HTTPS<br/>Admin REST API<br/>client_credentials"| EC2A
+    EC2B -->|"只读 DescribeUser"| QS[("QuickSight")]
 ```
 
 两台 EC2 是完全独立的故障域：本项目的 bug/资源占用不影响生产 SSO 链路，也不需要改动
-`xuechuan-quick-sso` 现有 CloudFormation 栈。详见 [`design.md` 3 节](design.md#3-部署架构)。
+现有生产 CloudFormation 栈。详见 [`design.md` 3 节](design.md#3-部署架构)。
 
 ## 3. 应用内部分层
 

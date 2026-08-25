@@ -4,7 +4,7 @@
 
 ## 1. 背景
 
-`xuechuan-quick-sso`（[相关目录](../../xuechuan-quick-sso)）已经跑通了 Keycloak → SAML → IAM Role → Amazon Quick 的 SSO 链路，34 人已经用 `add_single_user.py` / `create_users_from_xlsx.py` 建号。但建号流程本身还是纯命令行：
+现有生产环境已经跑通了 Keycloak → SAML → IAM Role → Amazon Quick 的 SSO 链路，34 人已经用一套命令行脚本（`add_single_user.py` / `create_users_from_xlsx.py`）建号。但建号流程本身还是纯命令行：
 
 - 管理员密码每次 `getpass` 手输，没有服务账号
 - 密码明文写进同目录 `quick-sso-users-batch1.xlsx`，人工转发
@@ -18,7 +18,7 @@
 ### MVP 范围内
 
 - Web 登录：走 Keycloak OIDC，不单独建一套账号密码表——复用 `quick` realm 现有的 `/quick-admin-pro` 组做管理员身份源，组里已经有 3 个真实账号（`alice`/`bob`/`carol`），应用一上线就能登录，不需要额外 bootstrap 一个初始管理员账号（详见 4.4）；MFA 留作后续迭代，MVP 不做——人数少、内网访问为主，已与用户确认这个取舍
-- 建单个 Quick SSO 账号：邮箱/拼音姓名/角色档位。**全部 6 档都管**（2026-08-20 用户明确要求，推翻了最初"只开放作者两档"的设计决定——起因是生产上线后，用户在真实用户列表里看到某个真实管理员账号显示"不在本应用管理范围内"，明确要求所有人都要能被管，不能有例外）。`ROLE_TO_GROUP` 覆盖管理员/作者/阅读者的专业版与非专业版共 6 档，映射关系对齐 `xuechuan-quick-sso/admin-guide-add-users.md` 里 `create_users_from_xlsx.py` 的完整表格
+- 建单个 Quick SSO 账号：邮箱/拼音姓名/角色档位。**全部 6 档都管**（2026-08-20 用户明确要求，推翻了最初"只开放作者两档"的设计决定——起因是生产上线后，用户在真实用户列表里看到某个真实管理员账号显示"不在本应用管理范围内"，明确要求所有人都要能被管，不能有例外）。`ROLE_TO_GROUP` 覆盖管理员/作者/阅读者的专业版与非专业版共 6 档，映射关系对齐现有命令行建号脚本（`create_users_from_xlsx.py`）里的完整角色-组对照表
 - **安全边界**：`/quick-admin-pro` 组同时是登录本应用的门槛（4.4 节），开放管理员档位的改档位/停用之后，理论上任何管理员都能把最后一个 admin-pro 降级/停用，导致所有人（包括操作者自己）都进不去这个工具，也没法再用工具自己修——这是这次扩权限直接引入的真实风险，不是假设性的。已加两条防护：①不允许把 `/quick-admin-pro` 组降到 0 人（`keycloak_service.LastAdminGuardError`）；②不允许管理员通过本应用停用/改自己的档位（`SelfLockoutError`，防呆不防坏人）
 - 建号后一次性展示初始密码（页面刷新/离开即不可再查看），管理员自行转发给本人
 - 用户列表：不维护本地副本，实时查 Keycloak `GET /admin/realms/quick/users`（+ 只读 QuickSight API 核对订阅状态），保证现有 34+ 个用 CLI 脚本建的号从上线第一天就完整可见，不会因为本应用只记录"自己建的号"而漏掉历史数据；状态区分「已建号 / 待首次登录激活订阅」（订阅由 `QuickSubscriptionAssignFunction` 异步生效，不是本应用能替用户完成的事）
@@ -107,39 +107,28 @@ Token 导出那三项仍然不做，理由不变，见上表）：
 
 ## 3. 部署架构
 
-**独立 EC2，复用现有 ALB。** 不与 Keycloak 共用实例，理由：故障域隔离（新应用的 bug/资源占用不影响生产 SSO），也不用改动、更不用重新部署现有 `xuechuan-quick-sso` 那个 CloudFormation 栈。
+**独立 EC2，复用现有 ALB。** 不与 Keycloak 共用实例，理由：故障域隔离（新应用的 bug/资源占用不影响生产 SSO），也不用改动、更不用重新部署现有生产 CloudFormation 栈。
 
-```
-                        ┌─────────────────────────────┐
-   HTTPS (443)          │   现有 ALB（your-existing-alb-...） │
-   ─────────────────►   │   *.example.com 通配符证书 │
-                        └───────────┬─────────────┬────┘
-                                    │             │
-                     Host: awssso...│             │Host: quick-admin...（新增）
-                                    ▼             ▼
-                        ┌───────────────┐   ┌───────────────────┐
-                        │ 现有 TargetGroup│   │ 新 TargetGroup（新增） │
-                        │  → :8080       │   │  → :8000            │
-                        └───────┬───────┘   └─────────┬─────────┘
-                                ▼                       ▼
-                  ┌─────────────────────┐   ┌─────────────────────────┐
-                  │ 现有 EC2             │   │ 新 EC2（本项目）           │
-                  │ Keycloak + Postgres  │   │ quick-account-manager    │
-                  │ i-xxxxxxxxxxxxxxxxx  │   │ app + db                 │
-                  └─────────────────────┘   └───────────┬─────────────┘
-                                                          │ HTTPS (Admin REST API,
-                                                          │ client_credentials)
-                                                          ▼
-                                              Keycloak（同 VPC，走域名或内网直连）
+```mermaid
+graph TB
+    Client["管理员浏览器"] -->|"HTTPS 443"| ALB["现有 ALB<br/>通配符证书"]
+
+    ALB -->|"Host: sso.example.com"| TG1["现有 TargetGroup<br/>:8080"]
+    ALB -->|"Host: quick-admin...（新增）"| TG2["新 TargetGroup（新增）<br/>:8000"]
+
+    TG1 --> EC2A["现有 EC2<br/>Keycloak + Postgres"]
+    TG2 --> EC2B["新 EC2（本项目）<br/>quick-account-manager<br/>app + db"]
+
+    EC2B -->|"HTTPS<br/>Admin REST API<br/>client_credentials"| EC2A
 ```
 
 新应用通过 HTTPS 调 Keycloak 的 Admin REST API（走 `sso.example.com` 或直接内网访问同一 VPC 里 Keycloak EC2 的 8080，两者都可行，倾向走对外域名以复用现成的健康检查和 TLS，避免额外配置内网直连信任关系），不需要两台 EC2 之间开特殊网络规则。
 
 ### 3.1 ALB 复用方案
 
-**独立 CloudFormation 栈，不修改 `xuechuan-quick-sso` 现有栈/模板。** 现有 `LoadBalancer`/`HttpsListener` 的 ARN 作为新栈的输入参数（字符串直接传入或用 `Fn::ImportValue`，取决于现有栈是否愿意加 `Outputs`/`Export`——不改现有栈的话就直接把 ARN 当参数字面量传，`ListenerRule`/`TargetGroup` 资源本来就不要求和 Listener/ALB 在同一个栈里）。这样新栈的任何变更（包括误操作）都不可能波及现有 Keycloak 生产栈，这也是部署记录里吃过一次"execute-change-set 被判定拒绝但实际执行了"的教训后应该有的隔离。
+**独立 CloudFormation 栈，不修改现有生产栈/模板。** 现有 `LoadBalancer`/`HttpsListener` 的 ARN 作为新栈的输入参数（字符串直接传入或用 `Fn::ImportValue`，取决于现有栈是否愿意加 `Outputs`/`Export`——不改现有栈的话就直接把 ARN 当参数字面量传，`ListenerRule`/`TargetGroup` 资源本来就不要求和 Listener/ALB 在同一个栈里）。这样新栈的任何变更（包括误操作）都不可能波及现有 Keycloak 生产栈，这也是部署记录里吃过一次"execute-change-set 被判定拒绝但实际执行了"的教训后应该有的隔离。
 
-**已知耦合风险**：把 ARN 当字面量参数传，CloudFormation 不会把这当依赖关系跟踪——如果现有栈的 ALB/Listener 以后被替换（哪怕是无关改动误触发的替换），新栈的 `ListenerRule` 会静默指向失效 ARN，不会有任何 CFN 层面的报错提示。不为这个低概率场景上自动化检测（ALB 是长期存活资源，被替换概率本来就低），改成一条运维检查清单项：**以后任何一次要变更 `xuechuan-quick-sso` 现有栈，操作前先 `aws elbv2 describe-load-balancers` 核对 ALB/Listener ARN 有没有变，再动这个新栈。**
+**已知耦合风险**：把 ARN 当字面量参数传，CloudFormation 不会把这当依赖关系跟踪——如果现有栈的 ALB/Listener 以后被替换（哪怕是无关改动误触发的替换），新栈的 `ListenerRule` 会静默指向失效 ARN，不会有任何 CFN 层面的报错提示。不为这个低概率场景上自动化检测（ALB 是长期存活资源，被替换概率本来就低），改成一条运维检查清单项：**以后任何一次要变更现有生产栈，操作前先 `aws elbv2 describe-load-balancers` 核对 ALB/Listener ARN 有没有变，再动这个新栈。**
 
 新增资源（都在新栈里）：
 
@@ -159,7 +148,7 @@ Token 导出那三项仍然不做，理由不变，见上表）：
 | 项 | 建议值 | 理由 |
 |---|---|---|
 | InstanceType | `t4g.medium` | 对齐现有 Keycloak 实例规格，一次到位不用后续调参数（已与用户确认：接受初期可能资源冗余的取舍，换取不用后续再改）|
-| ImageId | 显式 `AWS::EC2::Image::Id` 参数，锁定字面量 AMI ID，不用 `{{resolve:ssm:...}}` 动态解析 | 直接照搬 `xuechuan-quick-sso` 踩过的教训（[部署记录第 20-21 节](../../xuechuan-quick-sso/deployment.md)）：动态解析 AMI 会在任何一次不相关的模板更新时把实例整个替换掉 |
+| ImageId | 显式 `AWS::EC2::Image::Id` 参数，锁定字面量 AMI ID，不用 `{{resolve:ssm:...}}` 动态解析 | 直接照搬现有生产环境踩过的教训：动态解析 AMI 会在任何一次不相关的模板更新时把实例整个替换掉 |
 | VPC/子网 | 复用同一个默认 VPC（`vpc-xxxxxxxxxxxxxxxxx`），建议放 `PublicSubnet2`（跟 Keycloak 那台分开子网，AZ 级别再隔离一层，不是必需但成本为零） |
 | SSH | **不开 22 端口，不建密钥对**。用 SSM Session Manager（IAM Role 挂 `AmazonSSMManagedInstanceCore`）做运维访问 | 比现有 Keycloak 那台"默认关 22、需要临时开安全组"更进一步——直接不留这个口子，减少一类攻击面，也更符合"声明式/托管服务优先"的取向 |
 | DeletionPolicy / UpdateReplacePolicy | 两者都设 `Retain` | 同样照搬现有栈吃过教训后已经落地的保护 |
@@ -247,12 +236,11 @@ Token 导出那三项仍然不做，理由不变，见上表）：
 | 账号停用 | 纳入 MVP 范围：`enabled: false` 禁用而非硬删除，可逆、保留审计记录；硬删除原本留后续迭代，2026-08-24 已启用（带二次确认防呆），见 4.5 |
 | 新 EC2 规格 | `t4g.medium`，对齐现有 Keycloak 实例，不从 micro 起步 |
 | Unmanaged attributes | 首次生产部署**不开**这个 realm 级开关——用户明确要求上线过程对现有 `quick` realm 只做"新增两个 client"这一件事，不碰任何 realm 级配置；中文姓名功能因此在 Keycloak `attributes` 侧会被静默丢弃，但审计日志不受影响，一直可靠。后续如果要让中文姓名也在 Keycloak 侧生效，是一个独立的、需要重新评估影响面的决定，不在这次上线范围内 |
-| Git 管理 | 从项目一开始就 `git init` 纳入版本管理，不重复 `xuechuan-quick-sso` 目前不在任何仓库里的问题 |
+| Git 管理 | 从项目一开始就 `git init` 纳入版本管理，避免现有生产环境目前不在任何仓库里的老问题重演 |
 
 ## 8. 相关文档
 
-- [xuechuan-quick-sso/admin-guide-add-users.md](../../xuechuan-quick-sso/admin-guide-add-users.md) — 现有批量建号流程
-- [xuechuan-quick-sso/add_single_user.py](../../xuechuan-quick-sso/add_single_user.py) — 单人建号逻辑，本项目 MVP 的建号 service 直接迁移自此
-- [xuechuan-quick-sso/configuration.md](../../xuechuan-quick-sso/configuration.md) — 现有 ALB/EC2/Keycloak 具体参数值
-- [xuechuan-quick-sso/deployment.md](../../xuechuan-quick-sso/deployment.md) — 现有栈的部署记录，含 AMI 漂移/EC2 误替换的教训（第 20-21 节）
+- 现有生产环境的批量建号流程、单人建号脚本（`add_single_user.py`）、ALB/EC2/Keycloak
+  具体参数值、部署记录（含 AMI 漂移/EC2 误替换的教训）——不在本仓库内，是本项目
+  MVP 建号 service 的迁移来源，仅作背景说明
 - [kiro-fleet](https://github.com/toreydai/kiro-fleet) — 同类问题在 Kiro/IAM Identity Center 场景下的参考实现

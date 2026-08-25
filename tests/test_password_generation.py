@@ -1,7 +1,6 @@
-"""密码生成规则（迁移自 xuechuan-quick-sso/add_single_user.py）：14 位，强制
+"""密码生成规则（迁移自现有命令行建号脚本 add_single_user.py）：14 位，强制
 大小写/数字/特殊字符齐全，首字符不能触发 Excel/WPS 公式解析，且不能等于
-username/email。见 docs/design.md 4.2 节 + xuechuan-quick-sso/deployment.md
-第 18 节踩过的坑。
+username/email。见 docs/design.md 4.2 节。
 """
 
 import string

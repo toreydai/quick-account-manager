@@ -23,8 +23,7 @@ def test_all_six_tiers_allowed():
 
 
 def test_role_to_group_mapping_matches_admin_guide_table():
-    # 跟 xuechuan-quick-sso/admin-guide-add-users.md 里
-    # create_users_from_xlsx.py 的完整映射表保持一致
+    # 跟现有命令行建号脚本（create_users_from_xlsx.py）的完整映射表保持一致
     assert ROLE_TO_GROUP["管理员版"] == "/quick-admin"
     assert ROLE_TO_GROUP["管理员专业版"] == "/quick-admin-pro"
     assert ROLE_TO_GROUP["作者版"] == "/quick-author"

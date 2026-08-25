@@ -1,7 +1,7 @@
 """建号/重置密码/改档位/停用的业务逻辑。
 
-密码生成规则和 partialImport payload 结构直接迁移自
-xuechuan-quick-sso/add_single_user.py（已经在生产验证过 34 人），
+密码生成规则和 partialImport payload 结构直接迁移自现有命令行建号脚本
+（add_single_user.py，已经在生产验证过 34 人），
 只是从 CLI 脚本的函数搬成这里的 service 方法。
 
 角色范围（2026-08-20 用户明确要求）：全部 6 档都管，不再是最初设计里
@@ -23,8 +23,8 @@ from app.services.keycloak_client import KeycloakAPIError, KeycloakClient
 # 不像 QuickSight 那边贴近 botocore 连接池上限。
 _ROLE_LOOKUP_WORKERS = 32
 
-# 全部 6 档（对齐 xuechuan-quick-sso/admin-guide-add-users.md 里
-# create_users_from_xlsx.py 的完整映射），不再只开放作者两档。
+# 全部 6 档（对齐现有命令行建号脚本 create_users_from_xlsx.py 的完整映射），
+# 不再只开放作者两档。
 ROLE_TO_GROUP = {
     "管理员专业版": "/quick-admin-pro",
     "作者专业版": "/quick-author-pro",
@@ -62,8 +62,8 @@ PASSWORD_ALPHABET = {
     "special": "!@#$%^&*()-_=+",
 }
 
-# 开头是这几个字符的字符串在 Excel/WPS 里会被当成公式解析（历史踩过的坑，
-# 见 xuechuan-quick-sso/deployment.md 第 18 节），生成密码时首字符要避开；
+# 开头是这几个字符的字符串在 Excel/WPS 里会被当成公式解析（历史踩过的坑），
+# 生成密码时首字符要避开；
 # 这里虽然不写 xlsx 了，但保留同一条规则，避免管理员事后把密码贴进表格时
 # 又踩一次同样的坑。
 FORMULA_TRIGGER_CHARS = "=+-@\t\r"
@@ -178,8 +178,8 @@ class KeycloakService:
             "enabled": True,
             "emailVerified": True,
             "requiredActions": [],
-            # 显式指定，不依赖 Keycloak 自动赋默认角色——xuechuan-quick-sso 那两个
-            # 走 partialImport 的建号脚本 2026-08-21 发现过偶发漏赋 default-roles-quick
+            # 显式指定，不依赖 Keycloak 自动赋默认角色——现有那两个走 partialImport
+            # 的命令行建号脚本 2026-08-21 发现过偶发漏赋 default-roles-quick
             # 导致 Desktop 客户端登录报 "Offline tokens not allowed for the user or
             # client"（troubleshooting.md 第 10 条）。这里走的是 POST /users，本地对
             # 真实 Keycloak 26.6.3 实测过默认就会正确赋，不是同一个 bug，但补上显式声明

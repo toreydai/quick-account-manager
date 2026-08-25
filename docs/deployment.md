@@ -193,9 +193,8 @@ docker run -d --name kc-test -p 8080:8080 \
 ```
 
 ②③④⑤⑥都是一次性的人工步骤，模板不会（也不该）自动做——见 `infra/template.yaml`
-`UserData` 注释：不在 `UserData` 里写死仓库地址/密钥，避免重蹈
-`xuechuan-quick-sso` 那次因为 `UserData` 写死 fork 仓库地址导致 404 的坑
-（`xuechuan-quick-sso/deployment.md` 第 5 节）。
+`UserData` 注释：不在 `UserData` 里写死仓库地址/密钥，避免重蹈此前踩过的坑
+（`UserData` 写死某个 fork 仓库地址，仓库改名/删除后 `UserData` 里的地址直接 404）。
 
 ## 6. Keycloak 前置配置（人工一次性）
 
@@ -306,7 +305,7 @@ aws cloudformation deploy \
 |---|---|---|
 | `VpcId` / `AppSubnetId` | 占位符（脱敏），复用 Keycloak 那台实例所在的默认 VPC/子网 | **每次部署都必须覆盖**成真实值，占位符不可用 |
 | `InstanceType` | `t4g.medium` | 对齐现有 Keycloak 实例规格，一般不改 |
-| `AmiId` | 占位符（脱敏），实际应锁定字面量 AL2023 arm64 AMI ID | **每次部署都必须覆盖**成真实值；要升级 AMI 就重新解析一次新的 AMI ID 并评估重建影响——**不要**改成 `{{resolve:ssm:...}}` 动态解析写法，会在任何一次不相关的模板更新时把实例整个替换掉（`xuechuan-quick-sso/deployment.md` 第 20-21 节的教训） |
+| `AmiId` | 占位符（脱敏），实际应锁定字面量 AL2023 arm64 AMI ID | **每次部署都必须覆盖**成真实值；要升级 AMI 就重新解析一次新的 AMI ID 并评估重建影响——**不要**改成 `{{resolve:ssm:...}}` 动态解析写法，会在任何一次不相关的模板更新时把实例整个替换掉（此前踩过的教训） |
 | `ExistingAlbListenerArn` / `ExistingAlbSecurityGroupId` | 占位符（脱敏） | **每次部署都必须覆盖**成 §7.1 查到的真实值 |
 | `AdminDomainName` | `quick-admin.example.com`（示例域名） | 改成你自己的真实域名 |
 | `AlarmNotificationEmail` | 空 | 留空则 SNS Topic 仍会建、Alarm 仍会触发，但没人收到邮件通知；建议部署时就填，之后也可以去 SNS 控制台手动补订阅 |
