@@ -112,7 +112,7 @@ aws cloudformation deploy \
 1. 在阿里云 HiChina 加一条 CNAME：`quick-admin.example.com` → 现有 ALB DNS 名（`Outputs.Step1DNS`）
 2. 按上面「部署前置依赖」在生产 Keycloak 建两个 client
 3. 把 client secret 等敏感配置写进 SSM Parameter Store（SecureString，路径 `/quick-account-manager/*`，实例 IAM Role 已经有对应的只读权限）
-4. 代码分发：这个仓库没有推到 GitHub（用户明确选择不上 GitHub），走 S3 中转——`Outputs.AppCodeBucketName` 是专门建的私有 bucket，本地 `git archive --format=tar.gz -o release.tar.gz HEAD` 打包（只含 git 已提交的文件，不含 `.env`/`.venv`/`data/` 这些）→ `aws s3 cp` 上传 → 实例上用自己的 IAM Role（已经有这个 bucket 的只读权限）`aws s3 cp` 拉下来解压到 `/opt/quick-account-manager`
+4. 代码分发：走 S3 中转，不依赖 GitHub——实例 IAM Role 只拿到这个 S3 bucket 的只读权限，不管代码仓库托管在哪、公开与否都不影响部署流程。`Outputs.AppCodeBucketName` 是专门建的私有 bucket，本地 `git archive --format=tar.gz -o release.tar.gz HEAD` 打包（只含 git 已提交的文件，不含 `.env`/`.venv`/`data/` 这些）→ `aws s3 cp` 上传 → 实例上用自己的 IAM Role（已经有这个 bucket 的只读权限）`aws s3 cp` 拉下来解压到 `/opt/quick-account-manager`
 5. 起容器，走 SSM Session Manager（不是真 SSH）在实例上执行
 
 `docs/design.md` 5 节提到的 AWS Backup Plan（EBS 快照）目前**没有**写进这个模板——那一条已经明确标注为"上线后再补，不阻塞 MVP"，不是遗漏。

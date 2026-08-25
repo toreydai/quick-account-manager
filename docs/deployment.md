@@ -350,9 +350,10 @@ aws ssm put-parameter --name /quick-account-manager/session-secret-key \
 真实值——写进 SSM 是为了不让真实 secret 出现在任何命令行历史/仓库里，取值后手动
 粘贴进 `.env`）。
 
-### 8.3 代码分发（走 S3，不走 GitHub）
+### 8.3 代码分发（走 S3，不依赖代码托管平台）
 
-这个仓库没有推到 GitHub（用户明确选择不上 GitHub），走 S3 中转：
+不管这个仓库有没有推到 GitHub、公开还是私有，部署流程都走 S3 中转，不在实例上
+配置任何代码托管平台的凭证——实例 IAM Role 只拿到这个 S3 bucket 的只读权限：
 
 ```bash
 git archive --format=tar.gz -o release.tar.gz HEAD   # 只含 git 已提交文件，不含 .env/.venv/data/
