@@ -1,0 +1,344 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  quick-account-manager：独立 EC2 + 复用 xuechuan-quick-sso 现有 ALB 的新
+  CloudFormation 栈（docs/design.md 3.1/3.2 节）。这是完全独立的栈，不修改、
+  不依赖 ../../xuechuan-quick-sso/template.yaml 那个栈的模板文件——现有 ALB
+  的 Listener ARN 作为字符串参数传进来，CloudFormation 层面不建立跨栈依赖，
+  两个栈互不影响，也各自可以独立删除/重建（design.md 3.1 节「已知耦合风险」：
+  这意味着如果现有 ALB/Listener 被替换，这个栈不会自动感知，见下面参数说明
+  和 README 的运维检查清单）。
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Infrastructure
+        Parameters:
+          - VpcId
+          - AppSubnetId
+          - InstanceType
+          - AmiId
+      - Label:
+          default: 复用现有 ALB（xuechuan-quick-sso 栈）
+        Parameters:
+          - ExistingAlbListenerArn
+          - ExistingAlbSecurityGroupId
+          - AdminDomainName
+      - Label:
+          default: Application
+        Parameters:
+          - AppPort
+          - AlarmNotificationEmail
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-xxxxxxxxxxxxxxxxx
+    Description: >-
+      复用 xuechuan-quick-sso 那台 Keycloak 用的同一个默认 VPC。占位符，
+      部署前必须用 --parameter-overrides 传入真实值，见 deployment.md §7.2
+
+  AppSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-xxxxxxxxxxxxxxxxx
+    Description: >-
+      建议用 PublicSubnet2（跟现有 Keycloak EC2 所在的 PublicSubnet1
+      分开子网，design.md 3.2 节：AZ 级别再隔离一层，不是必需但成本为零）。
+      占位符，部署前必须用 --parameter-overrides 传入真实值
+
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+    AllowedValues:
+      - t4g.medium
+    Description: 对齐现有 Keycloak 实例规格（design.md 3.2 节已确认事项）
+
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-xxxxxxxxxxxxxxxxx
+    Description: >-
+      AL2023 arm64 AMI，锁定成字面量 ID，不用 SSM 动态解析引用——直接照搬
+      xuechuan-quick-sso 踩过的教训（deployment.md 第 20-21 节：动态解析会
+      在任何一次不相关的模板更新时把实例整个替换掉）。要升级 AMI 就手动改
+      这个 Default 并评估重建影响，不要改回动态引用写法。占位符，部署前
+      必须用 --parameter-overrides 传入真实值。
+
+  ExistingAlbListenerArn:
+    Type: String
+    Default: arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/your-existing-alb/xxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxx
+    Description: >-
+      xuechuan-quick-sso 栈里 HttpsListener 的 ARN（只读方式核实：
+      aws elbv2 describe-listeners）。字符串参数传入，不建跨栈依赖——部署前
+      务必按 design.md 3.1 节的运维检查清单重新核对这个值没有变。占位符，
+      部署前必须用 --parameter-overrides 传入真实值。
+
+  ExistingAlbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-xxxxxxxxxxxxxxxxx
+    Description: >-
+      xuechuan-quick-sso 栈里的 ALBSecurityGroup，新实例的安全组只放行这个
+      来源。占位符，部署前必须用 --parameter-overrides 传入真实值。
+
+  AdminDomainName:
+    Type: String
+    Default: quick-admin.example.com
+    Description: >-
+      管理后台的子域名，跟 sso.example.com 区分开（design.md 3.1 节：
+      host-header 分流，避免跟 Keycloak 自己的 /admin 路径产生歧义）。部署后
+      需要人工在阿里云 HiChina 加一条 CNAME 指向现有 ALB DNS 名，见 Outputs。
+
+  AppPort:
+    Type: Number
+    Default: 8000
+    Description: 应用容器监听的端口
+
+  AlarmNotificationEmail:
+    Type: String
+    Default: ''
+    Description: >-
+      CloudWatch 告警通知邮箱（design.md 3.3 节，加分项）。留空则不订阅告警
+      邮件（SNS Topic 仍会创建，Alarm 仍会触发，只是没人收到通知邮件，之后
+      可以手动去 SNS 控制台补订阅）。
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmNotificationEmail, '']]
+
+Resources:
+  # ---------- 网络 ----------
+
+  # GroupDescription 是 EC2 API 的字段，只支持 ASCII（中文会被 EC2 直接拒绝
+  # 建号，实测踩过这个坑：CREATE_FAILED "Character sets beyond ASCII are not
+  # supported"，validate-template 只做语法校验测不出来）。中文说明放这条注释：
+  # quick-account-manager 的 EC2 安全组，只放行现有 ALB 的 SecurityGroup，
+  # 不对公网开放任何端口（design.md 3.2 节：不开 SSH，运维走 SSM）。
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: >-
+        quick-account-manager EC2 security group - only allows inbound
+        from the existing ALB security group, no public ports (see
+        design.md 3.2: no SSH, SSM Session Manager only)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          SourceSecurityGroupId: !Ref ExistingAlbSecurityGroupId
+
+  # ---------- 代码部署中转（不用 GitHub，走 S3：本地打包上传，实例只读拉取）----------
+
+  AppCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub quick-account-manager-deploy-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ---------- IAM（design.md 3.2 节：最小权限）----------
+
+  AppInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: QuickSightReadOnlyForSubscriptionStatus
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - quicksight:ListUsers
+                  - quicksight:DescribeUser
+                  - quicksight:DescribeAccountSubscription
+                Resource: !Sub arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:*
+        - PolicyName: AppCodeAndSecretsReadOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub arn:aws:s3:::${AppCodeBucket}/*
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/quick-account-manager/*
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref AppInstanceRole
+
+  # ---------- EC2（design.md 3.2 节）----------
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DisableApiTermination: true
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AmiId
+      SubnetId: !Ref AppSubnetId
+      SecurityGroupIds:
+        - !Ref AppSecurityGroup
+      IamInstanceProfile: !Ref AppInstanceProfile
+      CreditSpecification:
+        CPUCredits: standard
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 16
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: quick-account-manager
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+
+          dnf update -y
+          dnf install -y docker git
+          systemctl enable docker
+          systemctl start docker
+
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64" \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          mkdir -p /opt/quick-account-manager
+          # 代码部署（git clone / CI 同步）和 .env（走 SSM Parameter Store
+          # SecureString 取值）是部署时的人工步骤，不在 UserData 里写死仓库
+          # 地址——README「部署步骤」一节有完整说明，避免重蹈
+          # xuechuan-quick-sso 那次 UserData 写死 fork 仓库地址导致 404 的坑
+          # （deployment.md 第 5 节）。
+
+      # 这台实例只放行 SSM 出站访问，不建密钥对、不开 22 端口
+      # （design.md 3.2 节）。
+
+  # ---------- ALB 复用（design.md 3.1 节：新增资源，不改现有栈）----------
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: !Ref AppPort
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref EC2Instance
+
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ExistingAlbListenerArn
+      Priority: 10
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values:
+              - !Ref AdminDomainName
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ---------- 监控告警（design.md 3.3 节，加分项）----------
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: quick-account-manager-alarms
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmNotificationEmail
+
+  UnhealthyTargetAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: quick-account-manager TargetGroup has unhealthy instance(s)
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  InstanceStatusCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: quick-account-manager EC2 instance status check failed
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref EC2Instance
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+Outputs:
+  InstanceId:
+    Description: 新 EC2 实例 ID（用 SSM Session Manager 连，不开 SSH）
+    Value: !Ref EC2Instance
+
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+
+  Step1DNS:
+    Description: >-
+      人工步骤：在阿里云 HiChina 加一条 CNAME，把 AdminDomainName 指向现有
+      ALB 的 DNS 名（跟 awssso 那条 CNAME 指向同一个 ALB）。这个 DNS 名不是
+      本栈管理的资源，本栈只拿到了它的 ListenerArn（ExistingAlbListenerArn
+      参数），查真实 DNS 名用 aws elbv2 describe-load-balancers，见
+      deployment.md §8.1。
+    Value: 见本 Output 的 Description，用 aws elbv2 describe-load-balancers 查询
+
+  Step2Keycloak:
+    Description: >-
+      人工步骤：在你的 Keycloak（KEYCLOAK_BASE_URL 指向的那个实例）的 quick
+      realm 建两个 client，见 README「部署前置依赖」/ deployment.md §6
+    Value: 见 README「部署前置依赖」/ deployment.md §6
+
+  AppCodeBucketName:
+    Description: 代码部署用的 S3 bucket，本地打包上传，实例只读拉取（见 README「部署到 AWS」）
+    Value: !Ref AppCodeBucket

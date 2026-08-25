@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}批量建号预览 - Quick 账号管理{% endblock %}
+{% block content %}
+
+<section class="card">
+  <h2>批量建号预览</h2>
+  <p class="hint">
+    共解析 {{ total }} 行：{{ valid_rows|length }} 行可以建号，
+    {{ invalid_rows|length }} 行有问题（不会被提交，需要改好 xlsx 重新上传）。
+    这一步还没有调用 Keycloak，确认无误后点最下面的确认按钮才会真正建号。
+  </p>
+
+  {% if invalid_rows %}
+  <h3>有问题的行（{{ invalid_rows|length }}）</h3>
+  <table>
+    <thead><tr><th>行号</th><th>姓名</th><th>邮箱</th><th>role</th><th class="error">问题</th></tr></thead>
+    <tbody>
+      {% for r in invalid_rows %}
+      <tr>
+        <td>{{ r.row_num }}</td>
+        <td>{{ r.name }}</td>
+        <td>{{ r.email }}</td>
+        <td>{{ r.role }}</td>
+        <td class="error">{{ r.error }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if valid_rows %}
+  <h3>可以建号的行（{{ valid_rows|length }}）</h3>
+  <form id="batchCreateForm">
+    <table>
+      <thead><tr><th>行号</th><th>姓名</th><th>用户名</th><th>邮箱</th><th>角色档位</th></tr></thead>
+      <tbody>
+        {% for r in valid_rows %}
+        <tr>
+          <td>{{ r.row_num }}</td>
+          <td>{{ r.name }}</td>
+          <td>{{ r.username }}</td>
+          <td>{{ r.email }}</td>
+          <td>{{ r.role }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {# 隐藏字段跟表格分开放，避免 <input> 直接挂在 <tr> 下面这种非法 HTML
+       嵌套——顺序上还是同一个 valid_rows 循环，跟表格行一一对应。 #}
+    {% for r in valid_rows %}
+    <input type="hidden" name="emails" value="{{ r.email }}">
+    <input type="hidden" name="first_names" value="{{ r.first_name }}">
+    <input type="hidden" name="last_names" value="{{ r.last_name }}">
+    <input type="hidden" name="usernames" value="{{ r.username }}">
+    <input type="hidden" name="roles" value="{{ r.role }}">
+    <input type="hidden" name="names" value="{{ r.name }}">
+    {% endfor %}
+    <p class="hint">确认名单和角色档位都对之后再提交——提交后会逐个真实调用 Keycloak 建号，边建边显示进度，不能撤销。</p>
+    <button type="button" id="confirmBatchBtn" data-count="{{ valid_rows|length }}">
+      确认批量建号（{{ valid_rows|length }} 人）
+    </button>
+  </form>
+
+  <div id="batchProgress" style="display:none; margin-top:16px;">
+    <p class="hint" id="batchProgressText"></p>
+    <p class="hint">初始密码只在这里显示这一次，离开页面后无法再次查看——请逐个转发给对应用户。如果没能及时转发，不用重新建号，回列表页对这个用户点「重置密码」即可。</p>
+    <table>
+      <thead><tr><th>用户名</th><th>邮箱</th><th>结果</th><th>初始密码 / 说明</th></tr></thead>
+      <tbody id="batchResultsBody"></tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="error">没有可以建号的行，先把上面列出的问题改好，回去重新上传。</p>
+  {% endif %}
+</section>
+
+<a href="/users/batch-create">重新上传</a> · <a href="/">返回用户列表</a>
+
+<script>
+(function () {
+  var btn = document.getElementById("confirmBatchBtn");
+  if (!btn) return;
+  var form = document.getElementById("batchCreateForm");
+  var progress = document.getElementById("batchProgress");
+  var progressText = document.getElementById("batchProgressText");
+  var resultsBody = document.getElementById("batchResultsBody");
+
+  var STATUS_LABEL = {
+    created: '<span class="chip chip-ok">建号成功</span>',
+    skipped: '<span class="chip chip-off">已跳过</span>',
+    partial_failure: '<span class="chip chip-off">异常状态</span>',
+    failed: '<span class="chip chip-off">失败</span>'
+  };
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function appendRow(payload) {
+    var tr = document.createElement("tr");
+    var lastCell = payload.status === "created"
+      ? '<span class="secret" style="font-size:1em; padding:4px 8px;">' + escapeHtml(payload.password) + "</span>"
+      : '<span class="error">' + escapeHtml(payload.message || "") + "</span>";
+    tr.innerHTML =
+      "<td>" + escapeHtml(payload.username) + "</td>" +
+      "<td>" + escapeHtml(payload.email) + "</td>" +
+      "<td>" + (STATUS_LABEL[payload.status] || escapeHtml(payload.status)) + "</td>" +
+      "<td>" + lastCell + "</td>";
+    resultsBody.appendChild(tr);
+  }
+
+  // 后端是 StreamingResponse(media_type="text/event-stream")，但走的是 POST
+  // （EventSource 只支持 GET，没法带表单 body），所以这里手动用 fetch +
+  // ReadableStream 读，按 SSE 的 "\n\n" 分隔手动切事件，不是真正的 EventSource。
+  btn.addEventListener("click", function () {
+    var count = btn.getAttribute("data-count");
+    if (!confirm("确认批量创建这 " + count + " 个账号？此操作不可撤销。")) return;
+
+    btn.disabled = true;
+    btn.textContent = "建号中…";
+    progress.style.display = "";
+    progressText.textContent = "0 / " + count + " 完成";
+
+    fetch("/users/batch-create/confirm", {
+      method: "POST",
+      body: new FormData(form),
+      credentials: "same-origin"
+    }).then(function (resp) {
+      if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+
+      function pump() {
+        return reader.read().then(function (result) {
+          if (result.done) return;
+          buffer += decoder.decode(result.value, { stream: true });
+          var events = buffer.split("\n\n");
+          buffer = events.pop(); // 最后一段可能是不完整的事件，留到下次拼接
+          events.forEach(function (chunk) {
+            if (chunk.indexOf("event: done") === 0) {
+              progressText.textContent = count + " / " + count + " 完成";
+              return;
+            }
+            var line = chunk.split("\n").filter(function (l) { return l.indexOf("data: ") === 0; })[0];
+            if (!line) return;
+            var payload = JSON.parse(line.slice(6));
+            appendRow(payload);
+            progressText.textContent = payload.index + " / " + payload.total + " 完成";
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function (err) {
+      progressText.textContent = "建号中断：" + err.message + "（已完成的行不受影响，未处理的行需要重新走一遍批量建号流程）";
+    }).finally(function () {
+      btn.textContent = "已完成";
+    });
+  });
+})();
+</script>
+{% endblock %}

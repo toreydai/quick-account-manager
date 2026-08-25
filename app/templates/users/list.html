@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}用户列表 - Quick 账号管理{% endblock %}
+{% block content %}
+
+<section class="card">
+  <h2>新建账号</h2>
+  <p class="hint">
+    新建只开放 {{ create_roles|join(' / ') }} 两档——管理员/阅读者这几档目前都是内部已有账号，
+    需要开通的话走 Keycloak 控制台；已建号的人要改成别的档位，用下面用户列表里的「切换档位」
+    （那边不限这两档，全部 6 档都能改）。
+  </p>
+  <form method="post" action="/users/create" class="inline-form">
+    <input type="email" name="email" placeholder="公司邮箱" required>
+    <input type="text" name="first_name" placeholder="拼音名（如 Huikun）" required>
+    <input type="text" name="last_name" placeholder="拼音姓（如 Xue）" required>
+    <input type="text" name="name" placeholder="中文姓名（可选）">
+    <select name="role" required>
+      {% for r in create_roles %}
+      <option value="{{ r }}">{{ r }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">建号</button>
+  </form>
+  <p class="hint">
+    <a href="/users/batch-create">批量建号（上传 xlsx）→</a> ·
+    <a href="/users/batch-create/template">下载批量建号模板 →</a>
+  </p>
+</section>
+
+<section class="card">
+  <h2>用户列表</h2>
+  {% if kc_error %}
+  <p class="error">查询 Keycloak 用户列表失败：{{ kc_error }}</p>
+  {% endif %}
+  <p class="hint">
+    <a href="/users/export">导出用户清单（xlsx）→</a>
+    含订阅状态，点击后要等 Keycloak + QuickSight 都查完才会开始下载，几秒钟属于正常。
+  </p>
+  <div class="search-box">
+    <input type="text" id="searchInput" placeholder="按姓名 / 用户名 / 邮箱筛选" autocomplete="off">
+  </div>
+
+  <div class="inline-form" id="bulkBar" style="margin:10px 0; flex-wrap:wrap;">
+    <span class="hint">批量操作（先勾选下面表格里的用户）：</span>
+    <select id="bulkRole">
+      {% for r in valid_roles %}
+      <option value="{{ r }}">{{ r }}</option>
+      {% endfor %}
+    </select>
+    <button type="button" id="bulkChangeTierBtn">批量切换档位</button>
+    <button type="button" id="bulkDisableBtn" class="danger">批量停用</button>
+    <button type="button" id="bulkEnableBtn">批量启用</button>
+    <span class="hint" id="bulkCount">已选 0 人</span>
+  </div>
+
+  <table id="userTable">
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="selectAll" title="全选（仅当前筛选结果）"></th>
+        <th>用户名</th>
+        <th>邮箱</th>
+        <th>角色档位</th>
+        <th>账号状态</th>
+        <th>订阅状态</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      {% set u = row.user %}
+      <tr data-search="{{ u.username }} {{ u.email }} {{ u.first_name }} {{ u.last_name }}">
+        <td><input type="checkbox" class="row-select" value="{{ u.id }}"></td>
+        <td>{{ u.username }}</td>
+        <td>{{ u.email }}</td>
+        <td>{{ u.role or "（未分配档位，不在任何 quick-* 组里）" }}</td>
+        <td>{% if u.enabled %}<span class="chip chip-ok">启用中</span>{% else %}<span class="chip chip-off">已停用</span>{% endif %}</td>
+        {% if u.role %}
+        <td class="qs-status" data-user-id="{{ u.id }}"><span class="qs-loading">查询中…</span></td>
+        {% else %}
+        <td class="qs-status">—</td>
+        {% endif %}
+        <td class="actions">
+          <!-- username/email 不再走隐藏表单字段传给后端——后端拿 URL 里的
+               user_id 反查 Keycloak 得到真实值，避免表单被篡改/过期导致
+               审计日志记错人（见 app/api/users.py 的说明）。所有用户都能
+               操作，不再按角色是否已知来隐藏按钮（2026-08-20 用户明确要求
+               所有人都要能被管理，不能有"不在管理范围"的例外）。 -->
+          <form method="post" action="/users/{{ u.id }}/reset-password" class="inline-form">
+            <button type="submit" onclick="return confirm('确认给 {{ u.email }} 重置密码？')">重置密码</button>
+          </form>
+          <form method="post" action="/users/{{ u.id }}/change-tier" class="inline-form">
+            <select name="new_role">
+              {% for r in valid_roles %}
+              <option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit">切换档位</button>
+          </form>
+          {% if u.enabled %}
+          <form method="post" action="/users/{{ u.id }}/set-enabled" class="inline-form">
+            <input type="hidden" name="enabled" value="false">
+            <button type="submit" class="danger" onclick="return confirm('确认停用 {{ u.email }}？停用后该用户无法再登录 SSO。')">停用</button>
+          </form>
+          {% else %}
+          <form method="post" action="/users/{{ u.id }}/set-enabled" class="inline-form">
+            <input type="hidden" name="enabled" value="true">
+            <button type="submit">重新启用</button>
+          </form>
+          {% endif %}
+          <!-- 硬删除：不可逆，比停用风险高一个量级。两层防呆：①只有已停用
+               的账号才能删（2026-08-24 加，见 app/services/keycloak_service.py
+               的 MustDisableFirstError）——强制走"先停用、留观察窗口、确认
+               没问题再删"这个顺序，一个还在正常使用的账号不可能被直接跳过
+               停用直接删掉；②光靠 confirm() 弹窗不够（容易被无意识点掉），
+               额外要求管理员手打一遍目标邮箱，后端逐字核对。 -->
+          {% if u.enabled %}
+          <span class="hint" title="硬删除前必须先停用">删除（需先停用）</span>
+          {% else %}
+          <form method="post" action="/users/{{ u.id }}/delete" class="inline-form"
+                onsubmit="return confirm('即将彻底删除 {{ u.email }}，Keycloak 里的账号记录会永久消失，此操作不可撤销，确认继续？');">
+            <input type="text" name="confirm_email" placeholder="输入邮箱确认删除" required style="width:170px">
+            <button type="submit" class="danger">删除</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint" id="rowCount"></p>
+</section>
+
+<script src="/static/table-filter.js"></script>
+<script src="/static/subscription-status.js"></script>
+<script src="/static/bulk-actions.js"></script>
+{% endblock %}

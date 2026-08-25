@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}审计日志 - Quick 账号管理{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>审计日志（最近 200 条，条件过滤后不足 200 条则显示全部匹配结果）</h2>
+  <form method="get" action="/audit-log" class="inline-form" style="flex-wrap:wrap; margin-bottom:12px;">
+    <input type="text" name="actor_email" placeholder="操作人邮箱（模糊匹配）" value="{{ filters.actor_email }}">
+    <input type="text" name="target_email" placeholder="目标用户邮箱（模糊匹配）" value="{{ filters.target_email }}">
+    <select name="action">
+      <option value="">全部操作类型</option>
+      {% for a in actions %}
+      <option value="{{ a.name }}" {% if filters.action == a.name %}selected{% endif %}>{{ a.value }}</option>
+      {% endfor %}
+    </select>
+    <select name="result">
+      <option value="">全部结果</option>
+      <option value="success" {% if filters.result == "success" %}selected{% endif %}>成功</option>
+      <option value="failed" {% if filters.result == "failed" %}selected{% endif %}>失败</option>
+    </select>
+    <button type="submit">筛选</button>
+    <a href="/audit-log">清除筛选</a>
+  </form>
+  <table>
+    <thead>
+      <tr>
+        <th>时间</th>
+        <th>操作人</th>
+        <th>操作</th>
+        <th>目标用户</th>
+        <th>中文姓名</th>
+        <th>详情</th>
+        <th>结果</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td>{{ e.created_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC</td>
+        <td>{{ e.actor_email }}</td>
+        <td>{{ e.action.value }}</td>
+        <td>{{ e.target_email }}</td>
+        <td>{{ e.target_name }}</td>
+        <td>{{ e.detail }}</td>
+        <td>
+          {% if e.success %}<span class="chip chip-ok">成功</span>
+          {% else %}<span class="chip chip-off" title="{{ e.error_message }}">失败</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

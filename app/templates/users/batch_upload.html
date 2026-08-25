@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}批量建号 - Quick 账号管理{% endblock %}
+{% block content %}
+
+<section class="card">
+  <h2>批量建号</h2>
+  <p class="hint">
+    上传 xlsx，表头必须包含 <code>姓名</code> / <code>邮箱</code> / <code>firstName</code> /
+    <code>lastName</code> / <code>role</code>（<code>role</code> 取值跟单人建号一致，2026-08-24
+    起只支持 <b>作者专业版 / 作者版</b> 两档），<code>username</code> 列可选，不填则用邮箱 @ 前的部分。
+    跟 xuechuan-quick-sso 里 <code>create_users_from_xlsx.py</code> 用的是同一套表头格式。
+  </p>
+  <p class="hint">
+    <a href="/users/batch-create/template">下载模板 →</a>
+    模板里 role 列带下拉，只能选这两档，减少手填打错字/打出不支持档位的情况。
+  </p>
+  <p class="hint">上传后先看预览页，确认名单和角色没问题再点确认，不会一上传就直接建号。</p>
+  <form method="post" action="/users/batch-create" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".xlsx" required>
+    <button type="submit">上传并预览</button>
+  </form>
+</section>
+
+<a href="/">返回用户列表</a>
+{% endblock %}

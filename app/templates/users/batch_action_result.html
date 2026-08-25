@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - Quick 账号管理{% endblock %}
+{% block content %}
+
+<section class="card">
+  <h2>{{ title }}</h2>
+  <table>
+    <thead><tr><th>用户</th><th>结果</th><th>说明</th></tr></thead>
+    <tbody>
+      {% for r in results %}
+      <tr>
+        <td>{{ r.email }}</td>
+        <td>
+          {% if r.status == "success" %}
+          <span class="chip chip-ok">成功</span>
+          {% elif r.status == "skipped" %}
+          <span class="chip chip-off">已跳过</span>
+          {% elif r.status == "partial_failure" %}
+          <span class="chip chip-off">异常状态</span>
+          {% else %}
+          <span class="chip chip-off">失败</span>
+          {% endif %}
+        </td>
+        <td>{{ r.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<a href="/">返回用户列表</a>
+{% endblock %}

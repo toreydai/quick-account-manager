@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>{% block title %}Quick 账号管理{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">Quick 账号管理后台</a>
+      {% if current_user %}
+      <nav>
+        <a href="/">用户列表</a>
+        <a href="/audit-log">审计日志</a>
+        <span class="who">{{ current_user.name or current_user.email }}</span>
+        <a href="/auth/logout">退出</a>
+      </nav>
+      {% endif %}
+    </div>
+  </header>
+  <main class="container">
+    {% if flash %}
+    <div class="flash">{{ flash }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
