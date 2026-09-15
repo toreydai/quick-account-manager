@@ -28,6 +28,18 @@
 
 ## 主要发现
 
+### 线上部署复核（2026-09-15）
+
+- 应用版本：`6476c3d`，已推送 GitHub 并部署到 `i-05f125f400c51017b`。
+- 完整测试：Python 3.12 环境 `pytest -q`，82 项通过。
+- 运行状态：容器 `/health` 正常，ALB target 状态 `healthy`，外部 HTTPS `/health` 返回 200。
+- 运行权限：`user=app`、只读根文件系统、移除全部 capabilities、`no-new-privileges`、进程数上限 256。
+- 线上容器覆盖 `ALLOWED_HOSTS=quick-admin.geovisearth.com,localhost,127.0.0.1,172.31.94.226`，包含本实例 IP 以允许 ALB 健康检查。
+- 线上容器覆盖 `FORWARDED_ALLOW_IPS=127.0.0.1,172.31.0.0/16`，信任本 VPC 代理提供的 HTTPS 转发信息；8000 端口仍仅允许 ALB 安全组访问。重建容器时须保留这两项配置；迁移实例/VPC 时按实际地址调整。使用 Compose 时可将这两项写入线上 `.env`。
+- 原容器保留为停止状态，供必要时回退。现有 EBS 加密迁移及剩余 Starlette 漏洞仍未完成，不应将本次上线视为漏洞清零。
+
+以下“主要发现”中的旧版本和代码状态为修复前证据，当前修复状态见上方摘要与修复记录。
+
 ### P0-1 依赖漏洞较多
 
 证据：
