@@ -2,13 +2,38 @@
 
 扫描日期：2026-09-15  
 范围：`quick-account-manager` 应用代码、Docker/CloudFormation 部署配置、当前 ZKTJ 线上部署的关键运行态。  
-结论：没有发现明显的未认证任意代码执行或硬编码生产密码；本次已修复 CSRF、防护响应头、上传限制、依赖升级、容器运行时加固和 CloudFormation 模板硬化。依赖审计仅剩 `starlette 0.52.1`，原因是当前 FastAPI 最新版仍约束 `starlette <1.0`，而漏洞库给出的修复版本为 Starlette 1.x，需要等 FastAPI 兼容后再升级。
+结论：已部署 CSRF、安全响应头、业务上传限制及容器加固，但 Starlette 风险未清零。复核发现 10 条扫描记录实际对应 5 个不同 CVE，其中普通表单解析拒绝服务漏洞在本应用中可达。之前“最新版 FastAPI 仍不支持 Starlette 1.x，必须等待”的结论错误：限制来自本项目固定的 FastAPI 0.128.8，官方 FastAPI 0.141.1 已允许 Starlette 1.x。详见下方专项复核。
 
-## 摘要
+## Starlette 专项复核
+
+2026-09-15 重新执行 `pip-audit -r requirements.txt --format json`：Starlette 0.52.1 的 10 条记录按 CVE 去重后为 5 项。
+
+| CVE | 当前应用判断 | 官方修复版本 |
+|---|---|---|
+| CVE-2026-54283 | 高优先级：普通表单字段数量/大小限制失效；FastAPI 在路由内登录与 CSRF 检查之前解析 Form 参数，未登录请求也可达 | 1.3.1 |
+| CVE-2026-48710 | Host 导致 URL 路径解释不一致；现有 TrustedHost 白名单拦截本次畸形 Host 用例，应用未使用 request.url.path 作权限判断，未证明认证绕过 | 1.0.1 |
+| CVE-2026-54282 | 畸形请求路径污染 URL hostname；未发现应用以 request.url 主机名作权限判断，未证明当前部署可利用 | 1.3.0 |
+| CVE-2026-48818 | Windows 静态文件 UNC/NTLM 泄露；当前 Linux 容器不满足平台条件 | 1.1.0 |
+| CVE-2026-48817 | HTTPEndpoint 非标准方法调用；应用未定义此类端点，路由显式声明 HTTP 方法，不满足已知触发条件 | 1.1.0 |
+
+本地有界验证（不向线上发送攻击流量）：
+
+- 6897 字节、1001 字段的普通表单，在 `max_fields=10` 下仍被全部接受，证实解析限制失效。
+- 通过 ASGITransport 发送未登录 `/users/create` 请求，记录到 `Request.form()` 执行，最终因缺少必填字段返回 422；测试将数据库/Keycloak 依赖替换为空实现，未调用真实服务。
+- 畸形 Host `testserver/abc?bar=` 返回 400。
+- 未做资源耗尽、并发压力或线上利用测试，不能据此量化实际服务中断阈值。
+
+现有 5MB 校验位于上传端点函数内，晚于 FastAPI 自动表单解析，且不覆盖普通表单。CSRF 和安全响应头不修复此解析漏洞。
+
+升级路径：官方 PyPI 的 FastAPI 0.141.1 依赖为 `starlette>=0.46.0`，`pip install --dry-run --ignore-installed fastapi==0.141.1 starlette==1.3.1` 解析成功。此结果仅证明版本依赖可解，尚未验证应用整体升级兼容性，也未部署新版本。应联合升级并完成登录、用户操作和批量导入回归，补充解析前请求体限制与回归用例。
+
+官方来源：[表单 DoS](https://github.com/Kludex/starlette/security/advisories/GHSA-82w8-qh3p-5jfq)、[Host 路径污染](https://github.com/Kludex/starlette/security/advisories/GHSA-86qp-5c8j-p5mr)、[路径污染主机名](https://github.com/Kludex/starlette/security/advisories/GHSA-jp82-jpqv-5vv3)、[Windows UNC](https://github.com/Kludex/starlette/security/advisories/GHSA-wqp7-x3pw-xc5r)、[HTTPEndpoint](https://github.com/Kludex/starlette/security/advisories/GHSA-x746-7m8f-x49c)、[FastAPI 元数据](https://pypi.org/pypi/fastapi/0.141.1/json)。
+
+## 修复状态摘要
 
 | 优先级 | 问题 | 状态 |
 |---|---|---|
-| P0 | 依赖存在已知漏洞，包含 `authlib`、`starlette`、`python-multipart`、`jinja2` 等 | 已升级可兼容依赖；剩余 Starlette 1.x 兼容待办 |
+| P0 | 依赖存在已知漏洞，包含 `authlib`、`starlette`、`python-multipart`、`jinja2` 等 | 已升级部分依赖；Starlette 剩余 5 个不同 CVE，联合升级待验证 |
 | P0 | 所有状态变更 POST 缺少 CSRF token | 已修复 |
 | P1 | Session cookie 未显式设置 `Secure`，应用缺少安全响应头 | 已修复 |
 | P1 | xlsx 上传无大小/行数限制，存在 DoS 风险 | 已修复 |
@@ -213,7 +238,7 @@
 /tmp/qam-py312-audit/bin/pip-audit -r requirements.txt --no-deps --cache-dir /tmp/pip-audit-cache
 ```
 
-结果：仅剩 `starlette 0.52.1` 相关 10 条。当前 `fastapi==0.128.8` 要求 `starlette<1.0.0,>=0.40.0`，而漏洞库给出的修复版本为 `starlette>=1.0.1/1.1.0/1.3.1`，直接强行升级会越过 FastAPI 支持范围；本次通过 CSRF、上传限制、安全头和依赖升级降低可利用面，保留为待 FastAPI 支持 Starlette 1.x 后处理。
+结果：`starlette 0.52.1` 相关 10 条记录，后续复核去重为 5 个 CVE。项目固定的 `fastapi==0.128.8` 要求 `starlette<1.0.0,>=0.40.0`；官方较新版本已允许 Starlette 1.x，可联合升级。CSRF、业务上传限制、安全响应头不能代替表单解析漏洞修复，详见上方专项复核。
 
 ```bash
 aws cloudformation validate-template --template-body file://infra/template.yaml
