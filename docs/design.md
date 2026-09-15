@@ -166,7 +166,7 @@ graph TB
 
 现状（`add_single_user.py`）用的是 master realm 的人类管理员账号，`grant_type=password` 直连拿 token——这个方式本来就是给命令行工具临时用的，不适合被 Web 后端长期持有。
 
-**改法**：在 Keycloak 的 `quick` realm（不是 `master`）里新建一个 confidential client，开启 Service Account，给这个 service account 分配 `realm-management` 的 client role：`manage-users`、`query-groups`、`view-users`（不要给 `manage-realm` 等更大权限）。后端用 `grant_type=client_credentials` 换 token，权限被限定在 `quick` realm 内部，即使这个凭证泄露也拿不到 master realm 的控制权——这是比现在的方案更小的权限半径。
+**改法**：在 Keycloak 的 `quick` realm（不是 `master`）里新建一个 confidential client，开启 Service Account，给这个 service account 分配 `realm-management` 的 client role：`manage-users`、`query-users`、`query-groups`、`view-users`（不要给 `manage-realm` 等更大权限）。同时要确保这些 client role 进入 `client_credentials` token（例如打开该 client 的 `Full Scope Allowed`，或配置等价 client scope）；真实部署中遇到过角色已分配但 token 没带角色，用户列表仍然 403 的情况。后端用 `grant_type=client_credentials` 换 token，权限被限定在 `quick` realm 内部，即使这个凭证泄露也拿不到 master realm 的控制权——这是比现在的方案更小的权限半径。
 
 这个 client 的创建是 Keycloak 侧的一次性手工配置（Admin Console 点几下，或者用现有 `bootstrap` 的 `python-keycloak` 库加几行做成幂等脚本，两种都行，不属于本应用的运行时代码）。
 
@@ -174,7 +174,7 @@ graph TB
 
 密码生成规则（避开 `= + - @` 开头这几个坑）和 `requiredActions: []` 显式清空这两点直接复用 `add_single_user.py` 里验证过的逻辑。
 
-**API 调用方式跟最初设计不一样，是实现阶段用真实 Keycloak 端到端测试才发现的**：`add_single_user.py` 用的 `partialImport` 接口能导入任意 realm 资源（client/role 等），Keycloak 把权限检查放在比 `manage-users` 更粗的粒度——4.1 节这个刻意收窄过的 service account（只有 `manage-users`/`query-groups`/`view-users`）打 `partialImport` 直接 403。`add_single_user.py` 当年能用是因为拿的是 master realm 人类管理员的完整权限，不是这里权限收窄过的 service account，这个权限粒度差异在设计阶段没有意识到，纯 mock 的单元测试也测不出来（403 只有对着真实 Keycloak 才会暴露）。
+**API 调用方式跟最初设计不一样，是实现阶段用真实 Keycloak 端到端测试才发现的**：`add_single_user.py` 用的 `partialImport` 接口能导入任意 realm 资源（client/role 等），Keycloak 把权限检查放在比 `manage-users` 更粗的粒度——4.1 节这个刻意收窄过的 service account 打 `partialImport` 直接 403。`add_single_user.py` 当年能用是因为拿的是 master realm 人类管理员的完整权限，不是这里权限收窄过的 service account，这个权限粒度差异在设计阶段没有意识到，纯 mock 的单元测试也测不出来（403 只有对着真实 Keycloak 才会暴露）。
 
 改成两步调用：`POST /users`（建号）+ `PUT /users/{id}/groups/{groupId}`（加组），都在 `manage-users` 权限范围内。两步之间失败的补偿逻辑（加组失败自动回滚删除、回滚也失败则报错但不让管理员误以为完全没建号）见实现里 `keycloak_service.py` 的 `create_user`，已经用真实 Keycloak 验证过失败场景。
 

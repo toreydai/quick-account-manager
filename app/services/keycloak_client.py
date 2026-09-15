@@ -2,7 +2,7 @@
 Admin REST API 的通用请求方法。业务逻辑（建号/重置密码/改组/停用）不放在这里，
 放在 keycloak_service.py，这层只管"怎么跟 Keycloak 说话"。
 
-对应 docs/design.md 4.1 节：用 quick realm 内的 service account（manage-users
+对应 docs/design.md 4.1 节：用 quick realm 内的 service account（manage-users/query-users
 权限）取代人工输入 master realm 管理员密码。
 """
 

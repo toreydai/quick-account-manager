@@ -135,7 +135,7 @@ POST /users/batch-create/confirm   → 预览页确认后，StreamingResponse (S
 
 | 依赖 | 用途 | 权限范围 | 调用方式 |
 |---|---|---|---|
-| Keycloak Admin REST API | 建号/改组/停用/删除/查用户 | `quick` realm 内 `manage-users`/`query-groups`/`view-users`（confidential client + `client_credentials`） | `app/services/keycloak_client.py`（token 缓存 + 401 重试） |
+| Keycloak Admin REST API | 建号/改组/停用/删除/查用户 | `quick` realm 内 `manage-users`/`query-users`/`query-groups`/`view-users`（confidential client + `client_credentials`，token 必须实际带到这些 roles） | `app/services/keycloak_client.py`（token 缓存 + 401 重试） |
 | Keycloak OIDC | 管理员登录 | 无额外权限，只读 `groups`/`email`/`name` claim | Authorization Code（`authlib`） |
 | QuickSight `DescribeUser`/`DescribeAccountSubscription` | 核对订阅是否已生效 | 只读，`Resource` 限定到本账号 | `boto3`，线程池并发 |
 | `QuickSubscriptionAssignFunction`（Lambda，非本项目代码） | 用户首次登录时把 Keycloak 组映射成实际 QuickSight 订阅 | 不属于本应用，本应用只能核对结果、不能触发或代替 | 异步，监听 CloudTrail `CreateUser` 事件 |
@@ -168,7 +168,7 @@ POST /users/batch-create/confirm   → 预览页确认后，StreamingResponse (S
 
 - 新 EC2 不对公网暴露任何入站端口，只有 ALB 的 SecurityGroup → 8000 一条规则
 - 不开 SSH，运维走 SSM Session Manager
-- Keycloak 凭证权限收窄到 `quick` realm 内的 `manage-users`/`query-groups`/`view-users`，不持有 `manage-realm`
+- Keycloak 凭证权限收窄到 `quick` realm 内的 `manage-users`/`query-users`/`query-groups`/`view-users`，不持有 `manage-realm`
 - 两个 Keycloak client 职责分离：一个只登录鉴权（OIDC），一个只调 Admin API（`client_credentials`）
 - 所有 secret（两个 client secret + session secret）走 SSM Parameter Store（SecureString），生产环境启动时校验长度 ≥ 32 位且不是占位符，否则拒绝启动（`app/core/config.py`）
 - 会改变管理员组成员的操作有 `LastAdminGuardError`/`SelfLockoutError` 双重护栏（§4.5）

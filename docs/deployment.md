@@ -209,9 +209,12 @@ client 的创建要保持人工/职责分离。
    `quick-account-manager-service`）
 3. `Client authentication`: **On**（confidential），`Service accounts roles`: **On**
 4. 保存后进 `Service accounts roles` 标签页，Assign role → 筛选 `realm-management` →
-   勾选 `manage-users`、`query-groups`、`view-users` 三个 client role
+   勾选 `manage-users`、`query-users`、`query-groups`、`view-users` 四个 client role
    （**不要**勾 `manage-realm` 等更大权限）
-5. Credentials 标签页复制 client secret，写进 §8.2 的 SSM 参数
+5. 确认这个 client 的 `Full Scope Allowed` 是 **On**，或者用等价 client scope 配置
+   确保上面四个 `realm-management` roles 会进入 `client_credentials` 换到的 token。
+   如果这里没配对，用户列表会报 `Keycloak API error 403: {"error":"HTTP 403 Forbidden"}`。
+6. Credentials 标签页复制 client secret，写进 §8.2 的 SSM 参数
 
 ### 6.2 OIDC 登录 client（管理后台自己登录用）
 

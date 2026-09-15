@@ -143,7 +143,7 @@ class KeycloakService:
     #
     # 原来（add_single_user.py / 建号最初版本）用的是 `POST /partialImport`——
     # 端到端本地测试对着真实 Keycloak 26.6.3 打的时候发现这个接口对 4.1 节配的
-    # service account（只有 manage-users/query-groups/view-users）返回 403：
+    # service account（即便有 manage-users/query-users/query-groups/view-users）返回 403：
     # partialImport 能导入任意 realm 资源（client、role 等），Keycloak 把它的
     # 权限检查放在了比 manage-users 更粗的粒度上，不是"能管用户"就能调。
     # add_single_user.py 当年能用是因为它拿的是 master realm 人类管理员的

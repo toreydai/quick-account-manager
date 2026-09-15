@@ -2,7 +2,7 @@
 
 这里改成 POST /users + PUT groups 两步，是本地端到端测试对着真实 Keycloak
 26.6.3 打的时候发现的：原来的 POST /partialImport 对 4.1 节配的最小权限
-service account（只有 manage-users/query-groups/view-users）返回 403——
+service account（即便有 manage-users/query-users/query-groups/view-users）也会返回 403——
 partialImport 的权限检查粒度比 manage-users 粗，不是"能管用户"就能调这个
 接口。这几个用例锁定新的调用序列，避免以后不小心又改回 partialImport。
 """

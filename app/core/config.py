@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     keycloak_base_url: str = "https://sso.example.com"
     keycloak_realm: str = "quick"
 
-    # 4.1 节：service account client（manage-users），后端调 Admin REST API 用
+    # 4.1 节：service account client（manage-users/query-users/...），后端调 Admin REST API 用
     keycloak_service_client_id: str = "quick-account-manager-service"
     keycloak_service_client_secret: str = "changeme"
 
