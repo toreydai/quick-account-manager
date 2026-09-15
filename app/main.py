@@ -7,6 +7,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api import audit, auth, health, users
 from app.core.config import get_settings
+from app.core.request_limits import RequestBodyLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
 
@@ -56,6 +57,7 @@ class SecurityHeadersMiddleware:
 
 app = FastAPI(title="Quick Account Manager")
 
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=settings.max_upload_bytes + 64 * 1024)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_host_list)
 app.add_middleware(
     SessionMiddleware,

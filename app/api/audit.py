@@ -6,12 +6,14 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.csrf import get_csrf_token
 from app.core.security import get_current_user
 from app.models.audit_log import AuditAction
 from app.services import audit_service
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["csrf_token"] = get_csrf_token
 
 
 @router.get("/audit-log", response_class=HTMLResponse)
@@ -49,6 +51,7 @@ async def audit_log_list(
         success=success_filter,
     )
     return templates.TemplateResponse(
+        request,
         "audit/list.html",
         {
             "request": request,

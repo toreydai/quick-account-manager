@@ -134,6 +134,7 @@ async def user_list(
     rows = [{"user": u} for u in users]
 
     return templates.TemplateResponse(
+        request,
         "users/list.html",
         {
             "request": request,
@@ -294,6 +295,7 @@ async def create_user(
     )
 
     return templates.TemplateResponse(
+        request,
         "users/secret_result.html",
         {
             "request": request,
@@ -312,6 +314,7 @@ async def batch_create_form(request: Request):
         return RedirectResponse(url="/auth/login", status_code=303)
 
     return templates.TemplateResponse(
+        request,
         "users/batch_upload.html",
         {"request": request, "current_user": user, "flash": request.query_params.get("flash")},
     )
@@ -377,6 +380,7 @@ async def batch_create_preview(request: Request, file: UploadFile = File(...)):
     invalid_rows = [r for r in rows if not r.valid]
 
     return templates.TemplateResponse(
+        request,
         "users/batch_preview.html",
         {
             "request": request,
@@ -520,6 +524,7 @@ async def reset_password(
     audit_service.record(db, user["email"], AuditAction.RESET_PASSWORD, target.email, success=True)
 
     return templates.TemplateResponse(
+        request,
         "users/secret_result.html",
         {
             "request": request,
@@ -736,6 +741,7 @@ async def batch_change_tier(
         results.append({"email": target.email, "status": "success", "message": f"已切换到「{new_role}」，实际生效要等对方下次登录"})
 
     return templates.TemplateResponse(
+        request,
         "users/batch_action_result.html",
         {"request": request, "current_user": user, "results": results, "title": f"批量改档位结果（{new_role}）"},
     )
@@ -790,6 +796,7 @@ async def batch_set_enabled(
         results.append({"email": target.email, "status": "success", "message": f"已{verb}"})
 
     return templates.TemplateResponse(
+        request,
         "users/batch_action_result.html",
         {"request": request, "current_user": user, "results": results, "title": f"批量{verb}结果"},
     )
