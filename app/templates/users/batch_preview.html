@@ -31,6 +31,7 @@
   {% if valid_rows %}
   <h3>可以建号的行（{{ valid_rows|length }}）</h3>
   <form id="batchCreateForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <table>
       <thead><tr><th>行号</th><th>姓名</th><th>用户名</th><th>邮箱</th><th>角色档位</th></tr></thead>
       <tbody>

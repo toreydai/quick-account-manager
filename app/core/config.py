@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_account_id: str = "123456789012"
 
+    # 浏览器/上传安全边界。生产域名走 ALB，测试里 TestClient 默认 Host 是
+    # testserver，所以一起放进默认白名单。
+    allowed_hosts: str = "quick-admin.geovisearth.com,localhost,127.0.0.1,testserver"
+    session_cookie_secure: bool = True
+    max_upload_bytes: int = 5 * 1024 * 1024
+    max_batch_rows: int = 1000
+
     @model_validator(mode="after")
     def _reject_weak_secrets_outside_dev(self) -> "Settings":
         if self.environment == "development":
@@ -80,6 +87,10 @@ class Settings(BaseSettings):
     @property
     def token_endpoint(self) -> str:
         return f"{self.keycloak_base_url}/realms/{self.keycloak_realm}/protocol/openid-connect/token"
+
+    @property
+    def allowed_host_list(self) -> list[str]:
+        return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
 
 
 @lru_cache

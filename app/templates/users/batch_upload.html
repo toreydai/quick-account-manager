@@ -16,6 +16,7 @@
   </p>
   <p class="hint">上传后先看预览页，确认名单和角色没问题再点确认，不会一上传就直接建号。</p>
   <form method="post" action="/users/batch-create" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <input type="file" name="file" accept=".xlsx" required>
     <button type="submit">上传并预览</button>
   </form>

@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+FROM python:3.12.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -9,7 +12,11 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini .
 
-RUN mkdir -p /app/data
+RUN addgroup --system app && adduser --system --ingroup app --uid 10001 app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
+
+USER app
 
 EXPOSE 8000
 

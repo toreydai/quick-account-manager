@@ -157,3 +157,16 @@ def test_template_example_row_parses_as_valid():
 
     assert len(rows) == 1
     assert rows[0].valid
+
+
+def test_parse_xlsx_rejects_too_many_rows():
+    content = make_xlsx(
+        HEADER,
+        [
+            ["A", "a@example.com", "A", "A", "作者版"],
+            ["B", "b@example.com", "B", "B", "作者版"],
+        ],
+    )
+
+    with pytest.raises(ValueError, match="最多允许 1 行"):
+        parse_xlsx(content, max_rows=1)

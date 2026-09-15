@@ -10,6 +10,7 @@
     （那边不限这两档，全部 6 档都能改）。
   </p>
   <form method="post" action="/users/create" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <input type="email" name="email" placeholder="公司邮箱" required>
     <input type="text" name="first_name" placeholder="拼音名（如 Huikun）" required>
     <input type="text" name="last_name" placeholder="拼音姓（如 Xue）" required>
@@ -86,9 +87,11 @@
                操作，不再按角色是否已知来隐藏按钮（2026-08-20 用户明确要求
                所有人都要能被管理，不能有"不在管理范围"的例外）。 -->
           <form method="post" action="/users/{{ u.id }}/reset-password" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <button type="submit" onclick="return confirm('确认给 {{ u.email }} 重置密码？')">重置密码</button>
           </form>
           <form method="post" action="/users/{{ u.id }}/change-tier" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <select name="new_role">
               {% for r in valid_roles %}
               <option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>
@@ -98,11 +101,13 @@
           </form>
           {% if u.enabled %}
           <form method="post" action="/users/{{ u.id }}/set-enabled" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <input type="hidden" name="enabled" value="false">
             <button type="submit" class="danger" onclick="return confirm('确认停用 {{ u.email }}？停用后该用户无法再登录 SSO。')">停用</button>
           </form>
           {% else %}
           <form method="post" action="/users/{{ u.id }}/set-enabled" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <input type="hidden" name="enabled" value="true">
             <button type="submit">重新启用</button>
           </form>
@@ -118,6 +123,7 @@
           {% else %}
           <form method="post" action="/users/{{ u.id }}/delete" class="inline-form"
                 onsubmit="return confirm('即将彻底删除 {{ u.email }}，Keycloak 里的账号记录会永久消失，此操作不可撤销，确认继续？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <input type="text" name="confirm_email" placeholder="输入邮箱确认删除" required style="width:170px">
             <button type="submit" class="danger">删除</button>
           </form>

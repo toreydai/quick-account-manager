@@ -43,6 +43,14 @@
     var form = document.createElement("form");
     form.method = "post";
     form.action = action;
+    var csrf = document.querySelector('meta[name="csrf-token"]');
+    if (csrf && csrf.content) {
+      var csrfInput = document.createElement("input");
+      csrfInput.type = "hidden";
+      csrfInput.name = "csrf_token";
+      csrfInput.value = csrf.content;
+      form.appendChild(csrfInput);
+    }
     ids.forEach(function (id) {
       var input = document.createElement("input");
       input.type = "hidden";

@@ -19,6 +19,7 @@ REQUIRED_COLUMNS = ("姓名", "邮箱", "firstName", "lastName", "role")
 # 模板/预览用：跟单人建号一样的表头顺序，username 列可选但模板里给出，方便
 # 管理员照着填；不用 REQUIRED_COLUMNS 直接拼是因为那个不含 username。
 TEMPLATE_HEADER = ("姓名", "邮箱", "firstName", "lastName", "username", "role")
+DEFAULT_MAX_ROWS = 1000
 
 
 @dataclass
@@ -37,7 +38,7 @@ class BatchRow:
         return self.error is None
 
 
-def parse_xlsx(content: bytes) -> List[BatchRow]:
+def parse_xlsx(content: bytes, max_rows: int = DEFAULT_MAX_ROWS) -> List[BatchRow]:
     """解析上传的 xlsx，逐行校验，不合格的行标记 error 但不中断整体解析——
     让管理员在预览页一次性看到所有问题行，不用一行一行改一行一行传。
     """
@@ -74,6 +75,8 @@ def parse_xlsx(content: bytes) -> List[BatchRow]:
     for row_num, raw in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         if raw is None or all(c is None for c in raw):
             continue  # 跳过空白行
+        if len(rows) >= max_rows:
+            raise ValueError(f"xlsx 数据行太多，最多允许 {max_rows} 行")
 
         name = cell(raw, "姓名")
         email = cell(raw, "邮箱").lower()

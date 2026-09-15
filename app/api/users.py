@@ -20,6 +20,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, Streamin
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.core.csrf import get_csrf_token, require_csrf
 from app.core.db import get_db
 from app.core.deps import get_keycloak_service, get_quicksight_checker
 from app.core.security import get_current_user
@@ -45,6 +47,8 @@ from app.services.quicksight_service import GROUP_TO_ROLE_PREFIX, QuickSightStat
 logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["csrf_token"] = get_csrf_token
+settings = get_settings()
 
 
 def _require_login(request: Request):
@@ -222,6 +226,7 @@ async def create_user(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     try:
         result = await run_in_threadpool(
@@ -347,10 +352,21 @@ async def batch_create_preview(request: Request, file: UploadFile = File(...)):
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
-    content = await file.read()
+    content_length = request.headers.get("content-length")
     try:
-        rows = await run_in_threadpool(parse_xlsx, content)
+        upload_too_large = bool(content_length and int(content_length) > settings.max_upload_bytes)
+    except ValueError:
+        upload_too_large = True
+    if upload_too_large:
+        return RedirectResponse(url="/users/batch-create?flash=xlsx 文件太大，最多允许 5MB", status_code=303)
+
+    content = await file.read(settings.max_upload_bytes + 1)
+    if len(content) > settings.max_upload_bytes:
+        return RedirectResponse(url="/users/batch-create?flash=xlsx 文件太大，最多允许 5MB", status_code=303)
+    try:
+        rows = await run_in_threadpool(parse_xlsx, content, settings.max_batch_rows)
     except ValueError as exc:
         return RedirectResponse(url=f"/users/batch-create?flash=解析失败：{exc}", status_code=303)
 
@@ -401,6 +417,7 @@ async def batch_create_confirm(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     rows = list(zip(emails, first_names, last_names, usernames, roles, names))
     total = len(rows)
@@ -474,6 +491,7 @@ async def reset_password(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     # username/email 不再信任表单隐藏字段——那两个字段可以被篡改/来自过期页面，
     # 跟 user_id 对不上就会把审计日志记到错的人身上。改成拿 user_id 去 Keycloak
@@ -524,6 +542,7 @@ async def change_tier(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     try:
         target = await run_in_threadpool(kc.get_user_by_id, user_id)
@@ -607,6 +626,7 @@ async def set_enabled(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     action = AuditAction.ENABLE_USER if enabled else AuditAction.DISABLE_USER
 
@@ -661,6 +681,7 @@ async def batch_change_tier(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     detail = f"{new_role}（批量操作）"
     results = []
@@ -731,6 +752,7 @@ async def batch_set_enabled(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     action = AuditAction.ENABLE_USER if enabled else AuditAction.DISABLE_USER
     verb = "启用" if enabled else "停用"
@@ -792,6 +814,7 @@ async def delete_user(
     user = _require_login(request)
     if user is None:
         return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
 
     try:
         target = await run_in_threadpool(kc.get_user_by_id, user_id)
