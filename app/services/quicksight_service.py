@@ -71,6 +71,64 @@ class QuickSightStatusChecker:
             return None
 
 
+class QuickSightLookupError(Exception):
+    """查 QuickSight 失败，且不是"用户不存在"——调用方不能把这种情况当成
+    "这个人在 Quick 里还没有账号"，否则会在 Quick 里其实已经有账号的情况下
+    走错分支。"""
+
+
+def _client_error_code(exc: Exception) -> str:
+    return getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+
+
+def find_user(checker: "QuickSightStatusChecker", username: str) -> Optional[dict]:
+    """返回 QuickSight 用户记录；确认不存在返回 None；其余失败抛
+    QuickSightLookupError。"""
+    if checker._client is None:
+        raise QuickSightLookupError("QuickSight client 不可用（没有 AWS 凭证或 boto3 缺失）")
+    try:
+        resp = checker._client.describe_user(
+            AwsAccountId=checker._account_id, Namespace="default", UserName=username
+        )
+    except Exception as exc:  # noqa: BLE001 - 统一按错误码区分"不存在"和"别的失败"
+        if _client_error_code(exc) == "ResourceNotFoundException":
+            return None
+        raise QuickSightLookupError(f"查询 QuickSight 用户 {username} 失败：{exc}") from exc
+    return resp.get("User")
+
+
+def update_user_role(checker: "QuickSightStatusChecker", username: str, email: str, quick_role: str) -> None:
+    """原地修改 QuickSight 用户的角色。QuickSight 只允许升级（实测：READER→AUTHOR
+    成功，AUTHOR→READER 报 "You cannot downgrade a user role."），降级会抛错。"""
+    if checker._client is None:
+        raise QuickSightLookupError("QuickSight client 不可用（没有 AWS 凭证或 boto3 缺失）")
+    checker._client.update_user(
+        AwsAccountId=checker._account_id,
+        Namespace="default",
+        UserName=username,
+        Email=email,
+        Role=quick_role,
+    )
+
+
+def list_quick_users(checker: "QuickSightStatusChecker") -> list:
+    if checker._client is None:
+        raise QuickSightLookupError("QuickSight client 不可用（没有 AWS 凭证或 boto3 缺失）")
+    users, token = [], None
+    try:
+        while True:
+            kwargs = {"AwsAccountId": checker._account_id, "Namespace": "default"}
+            if token:
+                kwargs["NextToken"] = token
+            resp = checker._client.list_users(**kwargs)
+            users.extend(resp.get("UserList", []))
+            token = resp.get("NextToken")
+            if not token:
+                return users
+    except Exception as exc:  # noqa: BLE001
+        raise QuickSightLookupError(f"列出 QuickSight 用户失败：{exc}") from exc
+
+
 # Keycloak 组路径 -> QuickSight IAM Role 前缀，用于拼 QuickSight 侧用户名。
 # 覆盖全部 6 档（对齐 keycloak_service.ROLE_TO_GROUP，2026-08-20 扩大管理
 # 范围之后不再只有作者两档），前缀命名沿用现有生产环境 IAM Role 的实际

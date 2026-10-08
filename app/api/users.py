@@ -42,12 +42,20 @@ from app.services.keycloak_service import (
     UserNotFoundError,
     VALID_ROLES,
 )
-from app.services.quicksight_service import GROUP_TO_ROLE_PREFIX, QuickSightStatusChecker
+from app.services import tier_service
+from app.services.quicksight_service import (
+    GROUP_TO_ROLE_PREFIX,
+    QuickSightLookupError,
+    QuickSightStatusChecker,
+    list_quick_users,
+)
+from app.services.tier_service import DowngradeNotSupportedError, RolePinningNotReadyError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["csrf_token"] = get_csrf_token
+templates.env.globals["upgrade_targets"] = tier_service.upgrade_targets
 settings = get_settings()
 
 
@@ -87,6 +95,26 @@ def _fetch_users(kc: KeycloakService):
         return [], str(exc)
 
 
+def _saml_role_for_new_user(role: str):
+    """新建账号时固定 IAM Role（仅在 ROLE_PINNING_ENABLED 打开后）。"""
+    settings = get_settings()
+    if not settings.role_pinning_enabled:
+        return None
+    return tier_service.saml_role_value(
+        settings.aws_account_id, tier_service.tier_role_name(role), settings.saml_provider_name
+    )
+
+
+def _upgrade(kc, qs, target, new_role):
+    settings = get_settings()
+    tier_service.upgrade_tier(
+        kc, qs, target, new_role,
+        aws_account_id=settings.aws_account_id,
+        provider_name=settings.saml_provider_name,
+        pinning_enabled=settings.role_pinning_enabled,
+    )
+
+
 def _build_subscription_status_map(users, qs: QuickSightStatusChecker) -> dict:
     """并发查每个有角色的用户的 QuickSight 订阅状态，返回 {user_id: 状态文案}。
 
@@ -106,6 +134,9 @@ def _build_subscription_status_map(users, qs: QuickSightStatusChecker) -> dict:
     def _lookup(u):
         group_path = ROLE_TO_GROUP.get(u.role)
         role_prefix = GROUP_TO_ROLE_PREFIX.get(group_path) if group_path else None
+        if u.pinned_saml_role:
+            # 固定过 IAM Role 的人，Quick 用户名前缀是固定的那个，不再跟着组走
+            role_prefix = tier_service.role_name_from_saml_value(u.pinned_saml_role)
         if not role_prefix:
             return u.id, "未知"
         qs_role = qs.get_subscription_role(role_prefix, u.email)
@@ -237,6 +268,7 @@ async def create_user(
             last_name=last_name,
             role=role,
             chinese_name=name,
+            saml_role_value=_saml_role_for_new_user(role) if role in ROLE_TO_GROUP else None,
         )
     except RoleNotAllowedError as exc:
         audit_service.record(
@@ -439,6 +471,7 @@ async def batch_create_confirm(
                     role=role,
                     username=username,
                     chinese_name=name,
+                    saml_role_value=_saml_role_for_new_user(role) if role in ROLE_TO_GROUP else None,
                 )
             except RoleNotAllowedError as exc:
                 audit_service.record(
@@ -543,6 +576,7 @@ async def change_tier(
     new_role: str = Form(...),
     db: Session = Depends(get_db),
     kc: KeycloakService = Depends(get_keycloak_service),
+    qs: QuickSightStatusChecker = Depends(get_quicksight_checker),
 ):
     user = _require_login(request)
     if user is None:
@@ -578,8 +612,8 @@ async def change_tier(
         return RedirectResponse(url=f"/?flash={exc}", status_code=303)
 
     try:
-        await run_in_threadpool(kc.change_tier, user_id, new_role)
-    except (RoleNotAllowedError, LastAdminGuardError) as exc:
+        await run_in_threadpool(_upgrade, kc, qs, target, new_role)
+    except (RoleNotAllowedError, LastAdminGuardError, DowngradeNotSupportedError, RolePinningNotReadyError) as exc:
         audit_service.record(
             db,
             user["email"],
@@ -682,6 +716,7 @@ async def batch_change_tier(
     new_role: str = Form(...),
     db: Session = Depends(get_db),
     kc: KeycloakService = Depends(get_keycloak_service),
+    qs: QuickSightStatusChecker = Depends(get_quicksight_checker),
 ):
     user = _require_login(request)
     if user is None:
@@ -714,8 +749,8 @@ async def batch_change_tier(
             continue
 
         try:
-            await run_in_threadpool(kc.change_tier, user_id, new_role)
-        except (RoleNotAllowedError, LastAdminGuardError) as exc:
+            await run_in_threadpool(_upgrade, kc, qs, target, new_role)
+        except (RoleNotAllowedError, LastAdminGuardError, DowngradeNotSupportedError, RolePinningNotReadyError) as exc:
             audit_service.record(
                 db, user["email"], AuditAction.CHANGE_TIER, target.email,
                 detail=detail, success=False, error_message=str(exc),
@@ -744,6 +779,51 @@ async def batch_change_tier(
         request,
         "users/batch_action_result.html",
         {"request": request, "current_user": user, "results": results, "title": f"批量改档位结果（{new_role}）"},
+    )
+
+
+@router.post("/users/backfill-pinned-roles", response_class=HTMLResponse)
+async def backfill_pinned_roles(
+    request: Request,
+    db: Session = Depends(get_db),
+    kc: KeycloakService = Depends(get_keycloak_service),
+    qs: QuickSightStatusChecker = Depends(get_quicksight_checker),
+):
+    """切换 SAML Role mapper 之前的一次性回填：给所有存量用户写入 quickSamlRole。
+    幂等，已固定的会跳过，可以重复执行。切换步骤见 docs/deployment.md。"""
+    user = _require_login(request)
+    if user is None:
+        return RedirectResponse(url="/auth/login", status_code=303)
+    await require_csrf(request)
+
+    settings = get_settings()
+    try:
+        users = await run_in_threadpool(kc.list_users)
+        quick_users = await run_in_threadpool(list_quick_users, qs)
+    except (KeycloakAPIError, QuickSightLookupError) as exc:
+        return RedirectResponse(url=f"/?flash=回填失败：{exc}", status_code=303)
+
+    plan = tier_service.plan_backfill(
+        users, quick_users, aws_account_id=settings.aws_account_id, provider_name=settings.saml_provider_name
+    )
+    results = []
+    for target, value, status, message in plan:
+        if value is not None:
+            try:
+                await run_in_threadpool(kc.set_pinned_saml_role, target.id, value)
+            except (KeycloakAPIError, PartialFailureError) as exc:
+                status, message = "failed", str(exc)
+        results.append({"email": target.email, "status": status, "message": message})
+        audit_service.record(
+            db, user["email"], AuditAction.CHANGE_TIER, target.email,
+            detail="回填固定 IAM Role", success=status != "failed",
+            error_message=None if status != "failed" else message,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "users/batch_action_result.html",
+        {"request": request, "current_user": user, "results": results, "title": "回填固定 IAM Role 结果"},
     )
 
 

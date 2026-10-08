@@ -6,8 +6,8 @@
   <h2>新建账号</h2>
   <p class="hint">
     新建只开放 {{ create_roles|join(' / ') }} 两档——管理员/阅读者这几档目前都是内部已有账号，
-    需要开通的话走 Keycloak 控制台；已建号的人要改成别的档位，用下面用户列表里的「切换档位」
-    （那边不限这两档，全部 6 档都能改）。
+    需要开通的话走 Keycloak 控制台；已建号的人要升到更高的档位，用下面用户列表里的「升级档位」
+    （只能升不能降：Amazon Quick 不允许降低已有用户的角色）。
   </p>
   <form method="post" action="/users/create" class="inline-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
@@ -42,17 +42,22 @@
   </div>
 
   <div class="inline-form" id="bulkBar" style="margin:10px 0; flex-wrap:wrap;">
-    <span class="hint">批量操作（先勾选下面表格里的用户）：</span>
+    <span class="hint">批量操作（先勾选下面表格里的用户；档位只能升不能降，选中的人里不能升到该档位的会被跳过并说明原因）：</span>
     <select id="bulkRole">
       {% for r in valid_roles %}
       <option value="{{ r }}">{{ r }}</option>
       {% endfor %}
     </select>
-    <button type="button" id="bulkChangeTierBtn">批量切换档位</button>
+    <button type="button" id="bulkChangeTierBtn">批量升级档位</button>
     <button type="button" id="bulkDisableBtn" class="danger">批量停用</button>
     <button type="button" id="bulkEnableBtn">批量启用</button>
     <span class="hint" id="bulkCount">已选 0 人</span>
   </div>
+  <form method="post" action="/users/backfill-pinned-roles" class="inline-form" style="margin:6px 0;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <button type="submit" onclick="return confirm('给所有还没固定 IAM Role 的存量用户写入 quickSamlRole？幂等，可重复执行。仅在切换 SAML Role mapper 之前运行，见 docs/deployment.md。')">回填固定 IAM Role</button>
+    <span class="hint">一次性迁移动作：切换 Keycloak SAML Role mapper 之前运行，见 docs/deployment.md</span>
+  </form>
 
   <table id="userTable">
     <thead>
@@ -90,15 +95,20 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <button type="submit" onclick="return confirm('确认给 {{ u.email }} 重置密码？')">重置密码</button>
           </form>
+          {# 只升不降：Quick 不允许降低已有用户的角色（UpdateUser 会报 "You cannot downgrade a user role."），
+             下拉框只列出比当前档位更高的选项，没有可升级的就不显示表单。 #}
+          {% set upgrade_options = upgrade_targets(u.role) %}
+          {% if upgrade_options %}
           <form method="post" action="/users/{{ u.id }}/change-tier" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <select name="new_role">
-              {% for r in valid_roles %}
-              <option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>
+              {% for r in upgrade_options %}
+              <option value="{{ r }}">{{ r }}</option>
               {% endfor %}
             </select>
-            <button type="submit">切换档位</button>
+            <button type="submit">升级档位</button>
           </form>
+          {% endif %}
           {% if u.enabled %}
           <form method="post" action="/users/{{ u.id }}/set-enabled" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">

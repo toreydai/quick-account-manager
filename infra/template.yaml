@@ -167,6 +167,16 @@ Resources:
                   - quicksight:DescribeUser
                   - quicksight:DescribeAccountSubscription
                 Resource: !Sub arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:*
+        # 升级档位在 Quick 里原地改角色用。只给 UpdateUser，不给 DeleteUser/RegisterUser：
+        # 降级本应用不做，也不删用户（删除会让该用户名下的资产失去所有者）。
+        - PolicyName: QuickSightUpdateUserForTierUpgrade
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - quicksight:UpdateUser
+                Resource: !Sub arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:user/default/*
         - PolicyName: AppCodeAndSecretsReadOnly
           PolicyDocument:
             Version: '2012-10-17'

@@ -152,7 +152,7 @@ graph TB
 | VPC/子网 | 复用同一个默认 VPC（`vpc-xxxxxxxxxxxxxxxxx`），建议放 `PublicSubnet2`（跟 Keycloak 那台分开子网，AZ 级别再隔离一层，不是必需但成本为零） |
 | SSH | **不开 22 端口，不建密钥对**。用 SSM Session Manager（IAM Role 挂 `AmazonSSMManagedInstanceCore`）做运维访问 | 比现有 Keycloak 那台"默认关 22、需要临时开安全组"更进一步——直接不留这个口子，减少一类攻击面，也更符合"声明式/托管服务优先"的取向 |
 | DeletionPolicy / UpdateReplacePolicy | 两者都设 `Retain` | 同样照搬现有栈吃过教训后已经落地的保护 |
-| IAM Role | 最小权限：`AmazonSSMManagedInstanceCore` + 自定义只读策略（`quicksight:ListUsers`、`quicksight:DescribeUser`、`quicksight:DescribeAccountSubscription`，`Resource` 限定到账号 `123456789012`） | 应用只需要读 QuickSight 用户/订阅状态做展示，不需要任何写权限——真正的建号写操作走 Keycloak Admin REST API，不经过 AWS API |
+| IAM Role | 最小权限：`AmazonSSMManagedInstanceCore` + 自定义只读策略（`quicksight:ListUsers`、`quicksight:DescribeUser`、`quicksight:DescribeAccountSubscription`，`Resource` 限定到账号 `123456789012`） | 应用主要读 QuickSight 用户/订阅状态做展示；唯一的写权限是升级档位用的 `quicksight:UpdateUser`（见文末「升级档位」一节），建号写操作走 Keycloak Admin REST API |
 
 **成本量级**：`t4g.medium` 按需约 $24.5/月 + 16GB gp3 EBS 约 $1.3/月，合计约 **$26/月** 量级（us-east-1 on-demand 价格，未来可上 Savings Plan 再降）；ALB 复用现有资源，不产生增量费用。
 
@@ -244,3 +244,12 @@ graph TB
   具体参数值、部署记录（含 AMI 漂移/EC2 误替换的教训）——不在本仓库内，是本项目
   MVP 建号 service 的迁移来源，仅作背景说明
 - [kiro-fleet](https://github.com/toreydai/kiro-fleet) — 同类问题在 Kiro/IAM Identity Center 场景下的参考实现
+
+
+## 升级档位：固定 IAM Role，原地升级；不提供降级
+
+- **问题**：Quick 联邦用户名是 `<IAM Role>/<邮箱>`。改档位只换 Keycloak 的组时，下次登录 SAML 带另一个 IAM Role，Quick 新建一个同邮箱用户：开了邮箱同步会拒绝登录，老用户的资产看不到，旧席位继续计费。
+- **做法**：每个人的 SAML Role 固定在 Keycloak 用户属性 `quickSamlRole`（换组不换 Role）；升级时对 Quick 里的同一用户调 `UpdateUser`（`app/services/tier_service.py`），先改 Quick、再换组，失败按 `PartialFailureError` 如实报告，可重试（Quick 侧幂等）。
+- **不做降级**：实测 `UpdateUser` 报 `You cannot downgrade a user role.`；用"删旧用户让新 Role 重建"会让资产失去所有者，所以不做，也不给实例角色 `DeleteUser` 权限。档位比较要求"级别不降且专业版不降"，`作者版→阅读专业版`这类跨维度变更保守拒绝（QuickSight 对它们怎么判定没有实测）。
+- **切换保护**：`ROLE_PINNING_ENABLED` 默认 false。false 时对 Quick 里已有账号的用户拒绝升级，避免在 mapper 还按组发 Role 时制造重复用户。切换步骤见 `deployment.md`。
+- **只实测了 `READER`↔`AUTHOR`**（账号 `xc`，测试用户已清理）；`*_PRO` 档位的原地升级未实测（会产生 Pro 席位费用），首次对 Pro 档升级时请先用测试用户验证。

@@ -467,3 +467,19 @@ CloudFormation 栈本身如果要更新（比如改 `AlarmNotificationEmail`）�
 - [`architecture.md`](architecture.md) —— 系统架构
 - [`design.md`](design.md) —— 完整设计决策记录
 - [`user-guide.md`](user-guide.md) —— 面向管理员的操作手册
+
+## 固定 IAM Role 的切换步骤（升级档位原地生效）
+
+**为什么需要**：Quick 联邦用户名是 `<IAM Role>/<邮箱>`。Keycloak 的 SAML Role 原来按所在的组发放，换组就换了 IAM Role，Quick 会新建一个同邮箱的用户——开了邮箱同步会报 "found more than 1 user for your email" 拒绝登录，老用户名下的分析/仪表板也看不到，旧席位继续计费。切换之后每个人的 IAM Role 固定在 Keycloak 用户属性 `quickSamlRole` 里，升级时本应用直接对 Quick 里的同一个用户调 `UpdateUser`，用户名不变、历史数据保留。
+
+**降级不支持**：实测 `UpdateUser` 只能升级（READER→AUTHOR 成功，AUTHOR→READER 报 `You cannot downgrade a user role.`），所以本应用只提供升级，界面只列出比当前更高的档位，服务端也会拒绝降级请求。
+
+切换顺序不能乱（`ROLE_PINNING_ENABLED` 默认 `false`，在完成前本应用会拒绝对 Quick 里已有账号的用户做升级，不会制造重复用户）：
+
+1. **Keycloak 开启 Unmanaged attributes**：Realm settings → User profile → Unmanaged attributes → Enabled。否则 `quickSamlRole` 会被静默丢弃（应用写入后会回读校验，写不进去会直接报错）。
+2. **给实例角色加 `quicksight:UpdateUser`**：更新 `infra/template.yaml` 对应的栈（只授 UpdateUser，不授 DeleteUser/RegisterUser）。
+3. **回填存量用户**：用户列表页点「回填固定 IAM Role」。以每人在 Quick 里实际使用的联邦用户为准；邮箱被多个用户或非联邦用户占用的会标红，先按 `troubleshooting.md` 第 3 条清理再重跑。幂等，可重复执行。确认结果页没有 failed。
+4. **切换 SAML Role mapper**：Clients → `urn:amazon:webservices` → Client scopes → 专用 scope → 删除 `Role` mapper（`Role list`），新建 `User Attribute` 类型 mapper：User Attribute = `quickSamlRole`，SAML Attribute Name = `https://aws.amazon.com/SAML/Attributes/Role`，Name Format = `URI Reference`，不勾 Aggregate attribute values。用一个已回填的测试用户登录验证能进入 Quick。
+5. **打开开关**：`.env`/SSM 里设 `ROLE_PINNING_ENABLED=true`（`SAML_PROVIDER_NAME` 默认 `keycloak`），重启应用。之后新建的账号会同时写入 `quickSamlRole`。
+
+注意：切换 mapper 之后，**在 Keycloak 控制台手动建的用户或 bootstrap 脚本建的用户**如果没有 `quickSamlRole`，登录时拿不到 Role 会失败；这类用户建完后点一次「回填固定 IAM Role」即可。回滚：把 mapper 改回 `Role list`、`ROLE_PINNING_ENABLED=false`。

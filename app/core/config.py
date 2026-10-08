@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_account_id: str = "123456789012"
 
+    # 改档位固定 IAM Role 的开关。false（默认）= 旧行为：Keycloak 按组发 SAML Role，
+    # 本应用对 Quick 里已有账号的用户拒绝升级（会造成同邮箱双用户）。
+    # true = Keycloak 的 SAML Role mapper 已切到读用户属性 quickSamlRole、且存量用户已回填，
+    # 升级才在 Quick 里原地完成。切换步骤见 docs/deployment.md。
+    role_pinning_enabled: bool = False
+    saml_provider_name: str = "keycloak"
+
     # 浏览器/上传安全边界。生产域名走 ALB，测试里 TestClient 默认 Host 是
     # testserver，所以一起放进默认白名单。
     allowed_hosts: str = "quick-admin.geovisearth.com,localhost,127.0.0.1,testserver"

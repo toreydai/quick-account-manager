@@ -55,6 +55,14 @@ CREATE_ALLOWED_ROLES = ("作者专业版", "作者版")
 ADMIN_PRO_GROUP_PATH = "/quick-admin-pro"
 ADMIN_PRO_ROLE = "管理员专业版"
 
+# 用户属性：固定住这个人登录 Quick 时用的 IAM Role（值是完整的 SAML Role 属性
+# 值，"arn:aws:iam::<账号>:role/<Role>,arn:aws:iam::<账号>:saml-provider/<IdP>"）。
+# Keycloak 的 SAML Role mapper 读这个属性，而不是读所在的组，所以改档位（换组）
+# 不会换 IAM Role，也就不会让 Quick 新建一个同邮箱的联邦用户——Quick 用户名是
+# "<Role>/<邮箱>"，换 Role 就是换了一个人，旧用户的数据留在旧用户名下，邮箱
+# 同步还会因为一个邮箱两个用户直接拒绝登录。
+QUICK_SAML_ROLE_ATTR = "quickSamlRole"
+
 PASSWORD_ALPHABET = {
     "upper": string.ascii_uppercase,
     "lower": string.ascii_lowercase,
@@ -117,6 +125,11 @@ def generate_password(username: str, email: str, length: int = 14) -> str:
             return pwd
 
 
+def _pinned_role_from_raw(raw: dict) -> Optional[str]:
+    values = (raw.get("attributes") or {}).get(QUICK_SAML_ROLE_ATTR) or []
+    return values[0] if values else None
+
+
 @dataclass
 class QuickUser:
     id: str
@@ -126,6 +139,9 @@ class QuickUser:
     last_name: str
     enabled: bool
     role: Optional[str]  # None = 不在 quick-author(-pro) 组里，本应用管不了这个人
+    # 固定住的 SAML Role 属性值（"roleArn,providerArn"），见 QUICK_SAML_ROLE_ATTR。
+    # None = 这个人还没被固定过，登录用哪个 IAM Role 仍由所在的组决定。
+    pinned_saml_role: Optional[str] = None
 
 
 @dataclass
@@ -162,6 +178,7 @@ class KeycloakService:
         role: str,
         username: Optional[str] = None,
         chinese_name: Optional[str] = None,
+        saml_role_value: Optional[str] = None,
     ) -> CreateUserResult:
         if role not in CREATE_ALLOWED_ROLES:
             raise RoleNotAllowedError(f"新建账号只能选 {CREATE_ALLOWED_ROLES} 这两档，{role!r} 不在其中")
@@ -217,7 +234,9 @@ class KeycloakService:
         try:
             group_id = self._get_group_id(group)
             self._client.request("PUT", f"/users/{user_id}/groups/{group_id}")
-        except (KeycloakAPIError, UserNotFoundError) as exc:
+            if saml_role_value:
+                self.set_pinned_saml_role(user_id, saml_role_value)
+        except (KeycloakAPIError, UserNotFoundError, PartialFailureError) as exc:
             try:
                 self._client.request("DELETE", f"/users/{user_id}")
             except KeycloakAPIError as rollback_exc:
@@ -276,6 +295,7 @@ class KeycloakService:
                     last_name=raw.get("lastName", ""),
                     enabled=raw.get("enabled", False),
                     role=role,
+                    pinned_saml_role=_pinned_role_from_raw(raw),
                 )
             )
         return users
@@ -319,7 +339,29 @@ class KeycloakService:
             last_name=raw.get("lastName", ""),
             enabled=raw.get("enabled", False),
             role=self._resolve_role(user_id),
+            pinned_saml_role=_pinned_role_from_raw(raw),
         )
+
+    def set_pinned_saml_role(self, user_id: str, saml_role_value: str) -> None:
+        """写入并回读确认 QUICK_SAML_ROLE_ATTR。
+
+        回读是必须的：Keycloak 26 默认静默丢弃 User Profile 里没声明过的属性
+        （不报错），见 create_user 里 chineseName 的说明。这个属性一旦被丢，
+        SAML Role mapper 读不到值，这个人就拿不到 Role、登录直接失败，所以
+        写完必须确认真的存进去了，存不进去就大声报错，不能当成成功。
+        """
+        raw = self._client.request("GET", f"/users/{user_id}").json()
+        attributes = dict(raw.get("attributes") or {})
+        attributes[QUICK_SAML_ROLE_ATTR] = [saml_role_value]
+        raw["attributes"] = attributes
+        self._client.request("PUT", f"/users/{user_id}", json=raw)
+        saved = self._client.request("GET", f"/users/{user_id}").json()
+        if _pinned_role_from_raw(saved) != saml_role_value:
+            raise PartialFailureError(
+                f"写入用户属性 {QUICK_SAML_ROLE_ATTR} 后回读不到（user_id={user_id}）：多半是 Keycloak 的 "
+                "Realm settings → User profile → Unmanaged attributes 没开，属性被静默丢弃了。"
+                "开启后重试；在开启之前不要把 SAML Role mapper 切到读这个属性。"
+            )
 
     # ---------- 订阅档位变更（4.5 节：先加新组再删旧组）----------
 
